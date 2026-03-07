@@ -4,6 +4,8 @@ Opinionated light automation daemon for [Zigbee2MQTT](https://www.zigbee2mqtt.io
 
 ## Why
 
+The best home automation interface is no interface. Lights should just work - right color temperature, right brightness, right time of day - without anyone touching an app. See [this post](https://vpetersson.com/2025/06/07/home-assistant-revamp/) for the full rationale.
+
 Home Assistant's light automation breaks in predictable ways: devices vanish when renamed, Flux updates lights that are off, motion sensors fail silently, config reloads are all-or-nothing. jeha replaces all of that with a focused Rust daemon that talks directly to Z2M over MQTT.
 
 ## Principles

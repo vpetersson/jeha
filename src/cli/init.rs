@@ -49,6 +49,7 @@ pub async fn run_init(host: &str, port: u16, output: Option<&Path>, base_topic: 
     let mut opts = MqttOptions::new("jeha-init", host, port);
     opts.set_keep_alive(Duration::from_secs(10));
     opts.set_clean_session(true);
+    opts.set_max_packet_size(1024 * 1024, 1024 * 1024); // 1MB - Z2M bridge/devices can be large
 
     let (client, mut event_loop) = AsyncClient::new(opts, 64);
 
