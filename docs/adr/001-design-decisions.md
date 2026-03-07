@@ -7,7 +7,7 @@
 
 Home Assistant's light automation is fragile. Devices get "forgotten" when Zigbee2MQTT renames them. Motion sensors silently stop triggering. The Flux integration updates lights that are off, wastes Zigbee bandwidth, and produces jerky transitions. Config reloads are all-or-nothing. The YAML-based automation system is error-prone and hard to reason about.
 
-jeha exists because we got tired of fixing the same problems. It is a focused, opinionated Rust daemon that handles **only** light automation — circadian lighting, motion triggers, night mode — by talking directly to Zigbee2MQTT over MQTT. Everything else stays in Z2M where it belongs.
+jeha exists because we got tired of fixing the same problems. It is a focused, opinionated Rust daemon that handles **only** light automation - circadian lighting, motion triggers, night mode - by talking directly to Zigbee2MQTT over MQTT. Everything else stays in Z2M where it belongs.
 
 This document records the design decisions we've made and, more importantly, *why* we made them. jeha is not a framework. It does not try to be flexible enough for every use case. It makes strong choices and sticks to them.
 
@@ -19,10 +19,10 @@ This document records the design decisions we've made and, more importantly, *wh
 
 A lighting daemon runs 24/7 on modest hardware (often a Raspberry Pi). It processes MQTT messages at high frequency, holds shared state across concurrent tasks, and must never crash. Rust gives us:
 
-- Zero-cost async with tokio — thousands of concurrent MQTT messages without threads
+- Zero-cost async with tokio - thousands of concurrent MQTT messages without threads
 - Ownership model that prevents the leaked-subscription and dangling-callback bugs that plague Home Assistant's Python automation
 - Compilation catches entire classes of bugs (wrong types, missing error handling, data races) before the code ever runs
-- Single static binary — no runtime, no virtualenv, no dependency hell on the target machine
+- Single static binary - no runtime, no virtualenv, no dependency hell on the target machine
 
 We are not optimizing for contributor onboarding speed. We are optimizing for correctness in a system that controls physical devices in people's homes.
 
@@ -34,7 +34,7 @@ Z2M friendly names change. Users rename devices on a whim. HA integrations break
 
 jeha resolves IEEE to friendly name at runtime by subscribing to Z2M's `bridge/devices` retained topic. When a device is renamed in Z2M, jeha picks it up automatically on the next message. Zero config changes. Zero downtime.
 
-Group names are the one exception — Z2M groups don't have IEEE addresses. We accept this trade-off because group names change far less frequently than device names, and jeha tracks group membership dynamically via `bridge/groups`.
+Group names are the one exception - Z2M groups don't have IEEE addresses. We accept this trade-off because group names change far less frequently than device names, and jeha tracks group membership dynamically via `bridge/groups`.
 
 ## Decision 3: Z2M groups for room addressing
 
@@ -60,11 +60,11 @@ The consequence: manual override TTLs and circadian snooze timers reset on resta
 
 **Circadian curves use cosine easing.**
 
-Home Assistant's Flux uses linear interpolation between color temperature waypoints. This produces visible jumps at transition boundaries — the light noticeably shifts when it enters or exits a ramp.
+Home Assistant's Flux uses linear interpolation between color temperature waypoints. This produces visible jumps at transition boundaries - the light noticeably shifts when it enters or exits a ramp.
 
 Cosine interpolation (`(1 - cos(t * pi)) / 2`) provides smooth acceleration and deceleration. The transition is imperceptible. Combined with 30-second MQTT transition hints (Z2M smooths between updates), the result is lighting that changes continuously without any visible steps.
 
-The curve is defined by three points — start (wake), peak (midday), end (sleep) — with configurable ramp durations. No sunrise/sunset dependency. Works for any schedule, anywhere.
+The curve is defined by three points - start (wake), peak (midday), end (sleep) - with configurable ramp durations. No sunrise/sunset dependency. Works for any schedule, anywhere.
 
 ## Decision 6: Never update lights that are off
 
@@ -78,11 +78,11 @@ jeha tracks `lights_on` state per room. The circadian engine skips any room wher
 
 **Manual light changes pause circadian with an optional TTL.**
 
-When someone sets a light to a specific brightness or color temperature via MCP (e.g., "set the living room to movie mode"), circadian updates for that room are paused. Without a TTL, this pause is indefinite — the override persists until explicitly cleared.
+When someone sets a light to a specific brightness or color temperature via MCP (e.g., "set the living room to movie mode"), circadian updates for that room are paused. Without a TTL, this pause is indefinite - the override persists until explicitly cleared.
 
 With `override_ttl_mins`, the override auto-expires and circadian resumes. This prevents the common scenario where someone sets a light for a movie and it stays at 20% brightness for the next three days because nobody remembered to turn circadian back on.
 
-Snooze works the same way for circadian pause — `snooze_circadian(room, hours)` pauses circadian for the specified duration and auto-resumes.
+Snooze works the same way for circadian pause - `snooze_circadian(room, hours)` pauses circadian for the specified duration and auto-resumes.
 
 Both use `std::time::Instant`-based TTLs checked on each circadian tick. No background timers, no timer wheel complexity.
 
@@ -106,11 +106,11 @@ Config is fully validated at load time through a three-stage pipeline: structura
 
 There is no web UI. There is no mobile app. The primary interface is an MCP server that exposes tools for querying state, controlling lights, managing automations, and diagnosing problems.
 
-Every MCP tool response includes a `description` field with a natural-language summary. Error messages name the available options ("Unknown room 'kichen'. Available rooms: kitchen, office, bathroom, ..."). Tool descriptions are written for an AI consumer — they explain not just what parameters exist, but when and why to use them.
+Every MCP tool response includes a `description` field with a natural-language summary. Error messages name the available options ("Unknown room 'kichen'. Available rooms: kitchen, office, bathroom, ..."). Tool descriptions are written for an AI consumer - they explain not just what parameters exist, but when and why to use them.
 
 Scenes (`bright`, `relax`, `movie`, `energize`, `nightlight`) are predefined with sensible values because an AI agent should be able to say "set the living room to movie mode" without needing to know that means brightness 80 and color temp 2200K.
 
-This is a deliberate choice. A good AI interface *is* a good human interface — the human just talks to the AI instead of fiddling with sliders.
+This is a deliberate choice. A good AI interface *is* a good human interface - the human just talks to the AI instead of fiddling with sliders.
 
 ## Decision 10: Fail gracefully, never block
 
@@ -136,7 +136,7 @@ jeha is designed to run unattended for months. The failure mode for any componen
 
 Z2M's `bridge/devices` topic includes an `exposes` array for every device that declares its capabilities: brightness, color_temp (with min/max mired range), color_xy, color_hs. jeha parses this on startup and on every `bridge/devices` update.
 
-Mixed-capability rooms just work. When jeha sends `{"color_temp": 370, "brightness": 200}` to a Z2M group containing both color-temp and brightness-only bulbs, Z2M handles it correctly — each bulb applies only the fields it supports.
+Mixed-capability rooms just work. When jeha sends `{"color_temp": 370, "brightness": 200}` to a Z2M group containing both color-temp and brightness-only bulbs, Z2M handles it correctly - each bulb applies only the fields it supports.
 
 For individual light commands via MCP, jeha validates against known capabilities and returns a clear error if a light doesn't support the requested feature.
 
@@ -165,11 +165,11 @@ This constraint is what makes the system reliable. Every line of code serves lig
 
 These decisions produce a system that is:
 
-- **Fast to start** — config parse + MQTT connect + state rebuild in under a second
-- **Impossible to misconfigure silently** — TOML parsing + semantic validation catches errors at load time
-- **Resilient to Z2M changes** — IEEE identity + dynamic capability discovery + group membership tracking
-- **Invisible in operation** — cosine curves + 30s transitions + skip-when-off = lighting that just works
-- **AI-native** — MCP-first interface with rich descriptions and sensible defaults
-- **Simple to deploy** — single binary, no database, no state file, no web server dependencies
+- **Fast to start** - config parse + MQTT connect + state rebuild in under a second
+- **Impossible to misconfigure silently** - TOML parsing + semantic validation catches errors at load time
+- **Resilient to Z2M changes** - IEEE identity + dynamic capability discovery + group membership tracking
+- **Invisible in operation** - cosine curves + 30s transitions + skip-when-off = lighting that just works
+- **AI-native** - MCP-first interface with rich descriptions and sensible defaults
+- **Simple to deploy** - single binary, no database, no state file, no web server dependencies
 
 The trade-offs are real: no web UI, no plugin system, no support for non-lighting devices, timer state lost on restart, Z2M groups required for optimal operation. We accept these trade-offs because they are the cost of a system that doesn't break.

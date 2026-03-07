@@ -16,8 +16,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run { config } => {
-            jeha::cli::run::run_daemon(&config).await?;
+        Commands::Run {
+            config,
+            mqtt_host,
+            mqtt_port,
+            mqtt_topic,
+            mcp_bind,
+        } => {
+            jeha::cli::run::run_daemon(&config, mqtt_host, mqtt_port, mqtt_topic, mcp_bind).await?;
         }
         Commands::Validate {
             config: config_path,

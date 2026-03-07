@@ -18,6 +18,18 @@ pub enum Commands {
     Run {
         #[arg(short, long, default_value = "config.toml")]
         config: PathBuf,
+        /// MQTT broker host (overrides config file)
+        #[arg(long, env = "JEHA_MQTT_HOST")]
+        mqtt_host: Option<String>,
+        /// MQTT broker port (overrides config file)
+        #[arg(long, env = "JEHA_MQTT_PORT")]
+        mqtt_port: Option<u16>,
+        /// MQTT base topic (overrides config file)
+        #[arg(long, env = "JEHA_MQTT_TOPIC")]
+        mqtt_topic: Option<String>,
+        /// MCP server bind address (overrides config file)
+        #[arg(long, env = "JEHA_MCP_BIND")]
+        mcp_bind: Option<String>,
     },
     /// Validate configuration
     Validate {

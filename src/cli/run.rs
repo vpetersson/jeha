@@ -15,9 +15,31 @@ use crate::mqtt::MqttHandle;
 use crate::mqtt::publish::Publisher;
 use crate::state;
 
-pub async fn run_daemon(config_path: &Path) -> Result<()> {
+pub async fn run_daemon(
+    config_path: &Path,
+    mqtt_host: Option<String>,
+    mqtt_port: Option<u16>,
+    mqtt_topic: Option<String>,
+    mcp_bind: Option<String>,
+) -> Result<()> {
     // 1. Parse + validate config
-    let app_config = Arc::new(config::load_config(config_path)?);
+    let mut loaded_config = config::load_config(config_path)?;
+
+    // Apply CLI/env overrides
+    if let Some(host) = mqtt_host {
+        loaded_config.mqtt.host = host;
+    }
+    if let Some(port) = mqtt_port {
+        loaded_config.mqtt.port = port;
+    }
+    if let Some(topic) = mqtt_topic {
+        loaded_config.mqtt.base_topic = topic;
+    }
+    if let Some(bind) = mcp_bind {
+        loaded_config.mcp.bind = bind;
+    }
+
+    let app_config = Arc::new(loaded_config);
     info!(
         "Config loaded: {} rooms, {} automations",
         app_config.rooms.len(),
