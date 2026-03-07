@@ -9,6 +9,7 @@ use tracing::info;
 use crate::automation::AutomationEngine;
 use crate::circadian::CircadianEngine;
 use crate::config;
+use crate::config_sync::ConfigSync;
 use crate::event::EventBus;
 use crate::lights_out::LightsOutTask;
 use crate::mcp;
@@ -122,7 +123,17 @@ pub async fn run_daemon(
     );
     tokio::spawn(automation.run());
 
-    // 6b. Start lights-out task
+    // 6b. Start config sync (auto-discover new Z2M groups)
+    let config_sync = ConfigSync::new(
+        app_config.clone(),
+        config_path,
+        shared_state.clone(),
+        event_bus.clone(),
+        cancel.child_token(),
+    );
+    tokio::spawn(config_sync.run());
+
+    // 6c. Start lights-out task
     let lights_out = LightsOutTask::new(
         app_config.clone(),
         shared_state.clone(),

@@ -2,6 +2,7 @@ pub mod automation;
 pub mod circadian;
 pub mod cli;
 pub mod config;
+pub mod config_sync;
 pub mod event;
 pub mod lights_out;
 pub mod mcp;

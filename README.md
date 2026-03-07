@@ -55,6 +55,8 @@ z2m_group = "Porch"
 circadian_enabled = false
 ```
 
+jeha auto-discovers new Z2M groups with lights and appends them to the config file. Restart or send SIGHUP to apply.
+
 Lights-out turns off all lights at 01:00 by default. Configure or disable:
 
 ```toml
