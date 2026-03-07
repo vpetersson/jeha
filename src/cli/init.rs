@@ -68,7 +68,7 @@ pub async fn run_init(host: &str, port: u16, output: Option<&Path>, base_topic: 
                     bail!("Timed out waiting for bridge/devices from Z2M. Is Zigbee2MQTT running?");
                 }
                 if groups_payload.is_none() {
-                    bail!("Timed out waiting for bridge/groups from Z2M.");
+                    info!("No bridge/groups received (Z2M may have no groups). Proceeding with devices only.");
                 }
                 break;
             }
@@ -76,20 +76,33 @@ pub async fn run_init(host: &str, port: u16, output: Option<&Path>, base_topic: 
                 match event {
                     Ok(Event::Incoming(Packet::ConnAck(_))) => {
                         if !subscribed {
-                            client.subscribe(format!("{}/bridge/devices", base_topic), QoS::AtLeastOnce).await?;
-                            client.subscribe(format!("{}/bridge/groups", base_topic), QoS::AtLeastOnce).await?;
+                            // Subscribe to bridge responses
+                            client.subscribe(format!("{}/bridge/#", base_topic), QoS::AtLeastOnce).await?;
                             subscribed = true;
-                            info!("Connected, waiting for Z2M data...");
+                            info!("Connected, requesting data from Z2M...");
+                            // Actively request devices and groups from Z2M
+                            client.publish(
+                                format!("{}/bridge/request/devices", base_topic),
+                                QoS::AtLeastOnce, false, "",
+                            ).await?;
+                            client.publish(
+                                format!("{}/bridge/request/groups", base_topic),
+                                QoS::AtLeastOnce, false, "",
+                            ).await?;
                         }
                     }
                     Ok(Event::Incoming(Packet::Publish(publish))) => {
                         let topic = &publish.topic;
-                        if topic.ends_with("bridge/devices") {
+                        if (topic.ends_with("bridge/devices") || topic.ends_with("bridge/response/devices"))
+                            && devices_payload.is_none()
+                        {
                             devices_payload = Some(publish.payload.to_vec());
-                            info!("Received bridge/devices");
-                        } else if topic.ends_with("bridge/groups") {
+                            info!("Received devices data");
+                        } else if (topic.ends_with("bridge/groups") || topic.ends_with("bridge/response/groups"))
+                            && groups_payload.is_none()
+                        {
                             groups_payload = Some(publish.payload.to_vec());
-                            info!("Received bridge/groups");
+                            info!("Received groups data");
                         }
                         if devices_payload.is_some() && groups_payload.is_some() {
                             break;
@@ -106,8 +119,11 @@ pub async fn run_init(host: &str, port: u16, output: Option<&Path>, base_topic: 
 
     let _ = client.disconnect().await;
 
-    let devices: Vec<Z2mDevice> = serde_json::from_slice(&devices_payload.unwrap())?;
-    let groups: Vec<Z2mGroup> = serde_json::from_slice(&groups_payload.unwrap())?;
+    let devices: Vec<Z2mDevice> = parse_z2m_payload(&devices_payload.unwrap())?;
+    let groups: Vec<Z2mGroup> = match groups_payload {
+        Some(payload) => parse_z2m_payload(&payload)?,
+        None => Vec::new(),
+    };
 
     // Build device info map
     let device_map: HashMap<String, DeviceInfo> = devices
@@ -141,6 +157,22 @@ pub async fn run_init(host: &str, port: u16, output: Option<&Path>, base_topic: 
     }
 
     Ok(())
+}
+
+/// Parse Z2M payload - handles both raw arrays (from retained topics)
+/// and `{"data": [...]}` wrappers (from bridge/response/* topics).
+fn parse_z2m_payload<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Result<Vec<T>> {
+    // Try parsing as raw array first
+    if let Ok(items) = serde_json::from_slice::<Vec<T>>(payload) {
+        return Ok(items);
+    }
+    // Try as {"data": [...], "status": "ok"} response wrapper
+    #[derive(Deserialize)]
+    struct ResponseWrapper<D> {
+        data: Vec<D>,
+    }
+    let wrapper: ResponseWrapper<T> = serde_json::from_slice(payload)?;
+    Ok(wrapper.data)
 }
 
 fn is_light_device(device: &Z2mDevice) -> bool {
