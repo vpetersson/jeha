@@ -15,6 +15,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub night_mode: NightModeSection,
     #[serde(default)]
+    pub lights_out: LightsOutConfig,
+    #[serde(default)]
     pub mcp: McpConfig,
     #[serde(default)]
     pub rooms: HashMap<String, RoomConfig>,
@@ -100,6 +102,18 @@ pub struct McpConfig {
     pub bind: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LightsOutConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_lights_out_time")]
+    pub time: String,
+}
+
+fn default_lights_out_time() -> String {
+    "01:00".to_string()
+}
+
 fn default_mcp_bind() -> String {
     "127.0.0.1:8420".to_string()
 }
@@ -114,6 +128,9 @@ pub struct RoomConfig {
     /// Set to false to disable circadian for this room entirely.
     #[serde(default = "default_true")]
     pub circadian_enabled: bool,
+    /// Set to false to exclude this room from automatic lights-out.
+    #[serde(default = "default_true")]
+    pub lights_out: bool,
     pub circadian: Option<CircadianOverride>,
     pub night_mode: Option<NightModeOverride>,
 }

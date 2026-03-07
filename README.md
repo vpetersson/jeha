@@ -55,6 +55,22 @@ z2m_group = "Porch"
 circadian_enabled = false
 ```
 
+Lights-out turns off all lights at 01:00 by default. Configure or disable:
+
+```toml
+[lights_out]
+enabled = true
+time = "01:00"
+```
+
+Exclude a room from lights-out:
+
+```toml
+[rooms.porch]
+z2m_group = "Porch"
+lights_out = false
+```
+
 ## CLI
 
 ```

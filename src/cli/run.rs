@@ -10,6 +10,7 @@ use crate::automation::AutomationEngine;
 use crate::circadian::CircadianEngine;
 use crate::config;
 use crate::event::EventBus;
+use crate::lights_out::LightsOutTask;
 use crate::mcp;
 use crate::mqtt::MqttHandle;
 use crate::mqtt::publish::Publisher;
@@ -120,6 +121,16 @@ pub async fn run_daemon(
         Some(circadian_for_automations),
     );
     tokio::spawn(automation.run());
+
+    // 6b. Start lights-out task
+    let lights_out = LightsOutTask::new(
+        app_config.clone(),
+        shared_state.clone(),
+        state_tx.clone(),
+        publisher.clone(),
+        cancel.child_token(),
+    );
+    tokio::spawn(lights_out.run());
 
     // 7. Start MCP server
     let mcp_state = shared_state.clone();

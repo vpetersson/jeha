@@ -47,6 +47,15 @@ impl Default for NightModeDefaults {
     }
 }
 
+impl Default for LightsOutConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            time: "01:00".to_string(),
+        }
+    }
+}
+
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
