@@ -111,8 +111,15 @@ pub struct RoomConfig {
     #[serde(default)]
     pub lights: Vec<String>,
     pub motion_sensor: Option<String>,
+    /// Set to false to disable circadian for this room entirely.
+    #[serde(default = "default_true")]
+    pub circadian_enabled: bool,
     pub circadian: Option<CircadianOverride>,
     pub night_mode: Option<NightModeOverride>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

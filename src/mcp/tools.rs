@@ -292,7 +292,12 @@ impl McpToolHandler {
                 let has_motion = room_config
                     .map(|r| r.motion_sensor.is_some())
                     .unwrap_or(false);
-                let circadian_status = self.describe_circadian_status(rs);
+                let circadian_enabled = room_config.map(|r| r.circadian_enabled).unwrap_or(true);
+                let circadian_status = if circadian_enabled {
+                    self.describe_circadian_status(rs)
+                } else {
+                    json!({"status": "disabled", "description": "Circadian is disabled for this room in config"})
+                };
 
                 json!({
                     "room_id": room_id,
@@ -304,6 +309,7 @@ impl McpToolHandler {
                     "occupancy": rs.occupancy,
                     "has_motion_sensor": has_motion,
                     "night_mode": rs.night_mode_active,
+                    "circadian_enabled": circadian_enabled,
                     "circadian": circadian_status,
                 })
             }

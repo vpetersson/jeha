@@ -117,6 +117,9 @@ impl CircadianEngine {
 
     pub fn compute_room_target(&self, room_id: &str) -> Option<CircadianTarget> {
         let room_config = self.config.rooms.get(room_id)?;
+        if !room_config.circadian_enabled {
+            return None;
+        }
         let params = self.params_for_room(room_config);
         let minutes = self.current_minutes();
         Some(compute_target(&params, minutes))
@@ -127,6 +130,10 @@ impl CircadianEngine {
         let current_state = self.state.load();
 
         for (room_id, room_config) in &self.config.rooms {
+            if !room_config.circadian_enabled {
+                continue;
+            }
+
             let room_state = current_state.rooms.get(room_id);
 
             let lights_on = room_state.map(|r| r.lights_on).unwrap_or(false);

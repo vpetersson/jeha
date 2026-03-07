@@ -126,4 +126,4 @@ Zigbee2MQTT -> Zigbee devices
 
 ## License
 
-MIT
+GPL-3.0
