@@ -41,15 +41,8 @@ async fn main() -> Result<()> {
             let schema = schemars::schema_for!(config::types::AppConfig);
             println!("{}", serde_json::to_string_pretty(&schema)?);
         }
-        Commands::Init { mqtt, output } => {
-            println!(
-                "jeha init: would connect to MQTT at {} and generate config",
-                mqtt
-            );
-            println!("This feature requires a running MQTT broker with Z2M.");
-            if let Some(path) = output {
-                println!("Output would be written to: {}", path.display());
-            }
+        Commands::Init { mqtt_host, mqtt_port, base_topic, output } => {
+            jeha::cli::init::run_init(&mqtt_host, mqtt_port, output.as_deref(), &base_topic).await?;
         }
     }
 

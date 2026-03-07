@@ -81,7 +81,8 @@ jeha run --mqtt-host 10.0.0.5        # Override MQTT host
 jeha validate [--config path]         # Validate config
 jeha validate --check-devices         # Also verify against live Z2M
 jeha schema                           # Export JSON Schema
-jeha init [--mqtt host:port]          # Auto-generate config from Z2M
+jeha init                             # Auto-generate config from Z2M
+jeha init --mqtt-host 10.0.0.5       # Custom MQTT host
 jeha init --output config.toml        # Write directly to file
 jeha migrate [--config path]          # Migrate config to latest schema
 jeha migrate --dry-run                # Preview migration without writing

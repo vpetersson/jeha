@@ -1,3 +1,4 @@
+pub mod init;
 pub mod run;
 pub mod validate;
 
@@ -50,9 +51,15 @@ pub enum Commands {
     Schema,
     /// Connect to Z2M, discover groups/devices, generate config.toml
     Init {
-        /// MQTT broker address
-        #[arg(long, default_value = "localhost:1883")]
-        mqtt: String,
+        /// MQTT broker host
+        #[arg(long, default_value = "localhost", env = "JEHA_MQTT_HOST")]
+        mqtt_host: String,
+        /// MQTT broker port
+        #[arg(long, default_value_t = 1883, env = "JEHA_MQTT_PORT")]
+        mqtt_port: u16,
+        /// Z2M base topic
+        #[arg(long, default_value = "zigbee2mqtt", env = "JEHA_MQTT_TOPIC")]
+        base_topic: String,
         /// Output file (default: stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
