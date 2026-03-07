@@ -42,7 +42,7 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&schema)?);
         }
         Commands::Init { mqtt_host, mqtt_port, base_topic, output } => {
-            jeha::cli::init::run_init(&mqtt_host, mqtt_port, output.as_deref(), &base_topic).await?;
+            jeha::cli::init::run_init(&mqtt_host, mqtt_port, &output, &base_topic).await?;
         }
     }
 

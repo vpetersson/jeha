@@ -43,7 +43,7 @@ struct DeviceInfo {
     is_motion_sensor: bool,
 }
 
-pub async fn run_init(host: &str, port: u16, output: Option<&Path>, base_topic: &str) -> Result<()> {
+pub async fn run_init(host: &str, port: u16, output: &Path, base_topic: &str) -> Result<()> {
     info!("Connecting to MQTT at {}:{}", host, port);
 
     let mut opts = MqttOptions::new("jeha-init", host, port);
@@ -146,15 +146,8 @@ pub async fn run_init(host: &str, port: u16, output: Option<&Path>, base_topic: 
 
     let config = generate_config(&groups, &device_map, base_topic);
 
-    match output {
-        Some(path) => {
-            std::fs::write(path, &config)?;
-            info!("Config written to {}", path.display());
-        }
-        None => {
-            print!("{}", config);
-        }
-    }
+    std::fs::write(output, &config)?;
+    info!("Config written to {}", output.display());
 
     Ok(())
 }

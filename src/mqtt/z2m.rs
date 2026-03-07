@@ -283,14 +283,44 @@ async fn handle_device_state(
         }
     }
 
-    // Detect external light changes (Z2M scenes, remotes, frontend, etc.)
-    // Only process if this message has light state fields
+    // Track light ON/OFF state from Z2M messages
+    let state_str = msg.get("state").and_then(|v| v.as_str());
     let has_brightness = msg.get("brightness").and_then(|v| v.as_u64());
     let has_color_temp = msg.get("color_temp").and_then(|v| v.as_u64());
-    let is_on = msg
-        .get("state")
-        .and_then(|v| v.as_str())
-        .is_some_and(|s| s == "ON");
+    let is_on = state_str.is_some_and(|s| s == "ON");
+    let is_off = state_str.is_some_and(|s| s == "OFF");
+
+    if (is_on || is_off)
+        && let Some(room_id) = find_room_for_device(device_name, &current, config)
+    {
+            if is_on {
+                let brightness = has_brightness.map(|b| b as u8);
+                let color_temp = has_color_temp.map(|ct| ct as u16);
+                // Only set lights_on state, don't change update_source
+                // (that's handled by external change detection below)
+                let room_state = current.rooms.get(&room_id);
+                let source = room_state
+                    .map(|rs| rs.update_source)
+                    .unwrap_or(UpdateSource::Circadian);
+                let _ = state_tx
+                    .send(StateCommand::UpdateRoomState {
+                        room_id: room_id.clone(),
+                        update: RoomStateUpdate::LightsOn {
+                            brightness,
+                            color_temp_mired: color_temp,
+                            source,
+                        },
+                    })
+                    .await;
+        } else {
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.clone(),
+                    update: RoomStateUpdate::LightsOff,
+                })
+                .await;
+        }
+    }
 
     if is_on
         && (has_brightness.is_some() || has_color_temp.is_some())

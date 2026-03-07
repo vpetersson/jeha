@@ -60,8 +60,8 @@ pub enum Commands {
         /// Z2M base topic
         #[arg(long, default_value = "zigbee2mqtt", env = "JEHA_MQTT_TOPIC")]
         base_topic: String,
-        /// Output file (default: stdout)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
+        /// Output file
+        #[arg(short, long, default_value = "config.toml")]
+        output: PathBuf,
     },
 }
