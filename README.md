@@ -39,7 +39,7 @@ schema_version = 1
 z2m_group = "Kitchen"
 ```
 
-That gives you circadian lighting with sensible defaults (cosine curve, 06:00-23:00, 2700K-4000K-2200K).
+That gives you circadian lighting with sensible defaults (cosine curve, 06:00-23:00, 2700K-4500K-2200K).
 
 Override per room:
 

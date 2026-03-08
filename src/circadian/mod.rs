@@ -128,6 +128,8 @@ impl CircadianEngine {
     async fn update_all_rooms(&self) -> Result<()> {
         let minutes = self.current_minutes();
         let current_state = self.state.load();
+        let mut updated_rooms: Vec<String> = Vec::new();
+        let mut target_logged = false;
 
         for (room_id, room_config) in &self.config.rooms {
             if !room_config.circadian_enabled {
@@ -201,6 +203,14 @@ impl CircadianEngine {
                 .effective_circadian(&self.config.circadian.defaults)
                 .transition_secs;
 
+            if !target_logged {
+                info!(
+                    "Circadian target: {}K ({}mired), brightness {}",
+                    target.color_temp_k, target.color_temp_mired, target.brightness
+                );
+                target_logged = true;
+            }
+
             if let Some(ref group) = room_config.z2m_group {
                 self.publisher
                     .push_circadian_group(
@@ -212,11 +222,20 @@ impl CircadianEngine {
                     .await?;
             } else {
                 for ieee in &room_config.lights {
+                    let supports_color_temp = current_state
+                        .device_map
+                        .get(ieee)
+                        .is_some_and(|d| d.supports_color_temp);
+                    let ct = if supports_color_temp {
+                        Some(target.color_temp_mired)
+                    } else {
+                        None
+                    };
                     self.publisher
                         .turn_on_ieee(
                             ieee,
                             Some(target.brightness),
-                            Some(target.color_temp_mired),
+                            ct,
                             Some(transition),
                         )
                         .await?;
@@ -242,6 +261,12 @@ impl CircadianEngine {
                     update: RoomStateUpdate::JehaPush,
                 })
                 .await;
+
+            updated_rooms.push(room_id.clone());
+        }
+
+        if !updated_rooms.is_empty() {
+            debug!("Circadian pushed to: {}", updated_rooms.join(", "));
         }
 
         Ok(())
@@ -270,11 +295,22 @@ impl CircadianEngine {
             let params = self.params_for_room(room_config);
             let target = compute_target(&params, minutes);
 
+            let current_state = self.state.load();
+            let supports_color_temp = current_state
+                .device_map
+                .get(ieee)
+                .is_some_and(|d| d.supports_color_temp);
+            let ct = if supports_color_temp {
+                Some(target.color_temp_mired)
+            } else {
+                None
+            };
+
             self.publisher
                 .turn_on_ieee(
                     ieee,
                     Some(target.brightness),
-                    Some(target.color_temp_mired),
+                    ct,
                     Some(3),
                 )
                 .await?;
