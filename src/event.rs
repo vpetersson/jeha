@@ -25,6 +25,10 @@ pub enum Event {
         room_id: String,
         active: bool,
     },
+    RemoteAction {
+        remote_ieee: String,
+        action: String,
+    },
     ExternalLightChange {
         room_id: String,
         device_name: String,

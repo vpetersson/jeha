@@ -292,6 +292,9 @@ impl McpToolHandler {
                 let has_motion = room_config
                     .map(|r| r.motion_sensor.is_some())
                     .unwrap_or(false);
+                let remotes = room_config
+                    .map(|r| r.remotes.clone())
+                    .unwrap_or_default();
                 let motion_timeout_secs = room_config.and_then(|r| {
                     r.effective_motion_timeout(self.config.general.motion_timeout_secs)
                 });
@@ -312,6 +315,7 @@ impl McpToolHandler {
                     "occupancy": rs.occupancy,
                     "has_motion_sensor": has_motion,
                     "motion_timeout_secs": motion_timeout_secs,
+                    "remotes": remotes,
                     "night_mode": rs.night_mode_active,
                     "circadian_enabled": circadian_enabled,
                     "circadian": circadian_status,

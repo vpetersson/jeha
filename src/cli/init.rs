@@ -41,6 +41,7 @@ struct DeviceInfo {
     friendly_name: String,
     is_light: bool,
     is_motion_sensor: bool,
+    is_remote: bool,
 }
 
 pub async fn run_init(host: &str, port: u16, output: &Path, base_topic: &str) -> Result<()> {
@@ -132,6 +133,7 @@ pub async fn run_init(host: &str, port: u16, output: &Path, base_topic: &str) ->
         .map(|d| {
             let is_light = is_light_device(&d);
             let is_motion_sensor = is_motion_device(&d);
+            let is_remote = is_remote_device(&d);
             (
                 d.ieee_address.clone(),
                 DeviceInfo {
@@ -139,6 +141,7 @@ pub async fn run_init(host: &str, port: u16, output: &Path, base_topic: &str) ->
                     friendly_name: d.friendly_name,
                     is_light,
                     is_motion_sensor,
+                    is_remote,
                 },
             )
         })
@@ -182,6 +185,14 @@ fn is_light_device(device: &Z2mDevice) -> bool {
 fn is_motion_device(device: &Z2mDevice) -> bool {
     if let Some(ref def) = device.definition {
         has_feature(&def.exposes, "occupancy")
+    } else {
+        false
+    }
+}
+
+fn is_remote_device(device: &Z2mDevice) -> bool {
+    if let Some(ref def) = device.definition {
+        has_feature(&def.exposes, "action")
     } else {
         false
     }
@@ -256,9 +267,35 @@ fn generate_config(
             out.push_str(&format!("motion_sensor = \"{}\"\n", ieee));
             out.push_str("motion_timeout_secs = 300\n");
         }
+
+        let remotes = find_remotes_for_group(group, device_map);
+        if !remotes.is_empty() {
+            let quoted: Vec<String> = remotes.iter().map(|r| format!("\"{}\"", r)).collect();
+            out.push_str(&format!("remotes = [{}]\n", quoted.join(", ")));
+        }
     }
 
     out
+}
+
+fn find_remotes_for_group(
+    group: &Z2mGroup,
+    device_map: &HashMap<String, DeviceInfo>,
+) -> Vec<String> {
+    let group_lower = group.friendly_name.to_lowercase();
+    let mut remotes = Vec::new();
+
+    for device in device_map.values() {
+        if !device.is_remote {
+            continue;
+        }
+        let name_lower = device.friendly_name.to_lowercase();
+        if name_lower.contains(&group_lower) || group_lower.contains(&name_lower) {
+            remotes.push(device.ieee_address.clone());
+        }
+    }
+
+    remotes
 }
 
 fn find_motion_sensor_for_group(

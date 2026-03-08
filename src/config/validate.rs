@@ -27,6 +27,10 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
             validate_ieee(sensor, &format!("rooms.{}.motion_sensor", room_id))?;
         }
 
+        for (i, remote) in room.remotes.iter().enumerate() {
+            validate_ieee(remote, &format!("rooms.{}.remotes[{}]", room_id, i))?;
+        }
+
         if room.motion_timeout_secs.is_some() && room.motion_sensor.is_none() {
             warn!(
                 "Room '{}' has motion_timeout_secs but no motion_sensor — timeout will have no effect",

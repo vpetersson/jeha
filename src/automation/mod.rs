@@ -14,7 +14,7 @@ use crate::circadian::CircadianEngine;
 use crate::config::types::{ActionConfig, AppConfig, AutomationConfig};
 use crate::event::{Event, EventBus};
 use crate::mqtt::publish::Publisher;
-use crate::state::{SharedState, StateCommand};
+use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum AutomationState {
@@ -96,6 +96,9 @@ impl AutomationEngine {
     }
 
     async fn handle_event(&mut self, event: Event) {
+        // Built-in remote handling: rooms with remotes get toggle/dim/night mode.
+        self.handle_builtin_remote(&event).await;
+
         // Built-in motion handling: rooms with motion_sensor + motion_timeout_secs
         // get automatic lights-on/off without needing explicit automations.
         let builtin_handled = self.handle_builtin_motion(&event).await;
@@ -319,5 +322,409 @@ impl AutomationEngine {
         }
 
         handled
+    }
+
+    /// Handle built-in remote control actions.
+    /// Matches Z2M action strings to common remote behaviors:
+    /// - toggle/on/off: light control (circadian-aware)
+    /// - brightness_up/down (click or move): step brightness, pause circadian
+    /// - arrow_right/right: night mode on
+    /// - arrow_left/left: night mode off, resume circadian
+    async fn handle_builtin_remote(&mut self, event: &Event) {
+        let Event::RemoteAction {
+            remote_ieee,
+            action,
+        } = event
+        else {
+            return;
+        };
+
+        // Find all rooms that have this remote configured
+        let rooms: Vec<(String, crate::config::types::RoomConfig)> = self
+            .config
+            .rooms
+            .iter()
+            .filter(|(_, rc)| rc.remotes.iter().any(|r| r == remote_ieee))
+            .map(|(id, rc)| (id.clone(), rc.clone()))
+            .collect();
+
+        if rooms.is_empty() {
+            return;
+        }
+
+        let action_lower = action.to_lowercase();
+        let remote_action = classify_remote_action(&action_lower);
+
+        let Some(remote_action) = remote_action else {
+            debug!(
+                "Unhandled remote action '{}' from {}",
+                action, remote_ieee
+            );
+            return;
+        };
+
+        for (room_id, room_config) in &rooms {
+            match remote_action {
+                RemoteActionType::Toggle => {
+                    let current = self.state.load();
+                    let lights_on = current
+                        .rooms
+                        .get(room_id)
+                        .map(|rs| rs.lights_on)
+                        .unwrap_or(false);
+
+                    if lights_on {
+                        info!("Remote: toggling lights off in '{}'", room_id);
+                        let off = ActionConfig::LightsOff {
+                            delay_secs: 0,
+                            transition: Some(1),
+                        };
+                        if let Err(e) = action::execute_action(
+                            &off,
+                            room_id,
+                            room_config,
+                            &self.publisher,
+                            &self.state_tx,
+                            &self.circadian_engine,
+                        )
+                        .await
+                        {
+                            error!("Remote: failed to turn off '{}': {}", room_id, e);
+                        }
+                    } else {
+                        info!("Remote: toggling lights on in '{}' (circadian)", room_id);
+                        let on = ActionConfig::LightsOn {
+                            use_circadian: true,
+                            brightness: None,
+                            color_temp_k: None,
+                            transition: Some(1),
+                        };
+                        if let Err(e) = action::execute_action(
+                            &on,
+                            room_id,
+                            room_config,
+                            &self.publisher,
+                            &self.state_tx,
+                            &self.circadian_engine,
+                        )
+                        .await
+                        {
+                            error!("Remote: failed to turn on '{}': {}", room_id, e);
+                        }
+                    }
+                }
+
+                RemoteActionType::On => {
+                    info!("Remote: turning on lights in '{}' (circadian)", room_id);
+                    let on = ActionConfig::LightsOn {
+                        use_circadian: true,
+                        brightness: None,
+                        color_temp_k: None,
+                        transition: Some(1),
+                    };
+                    if let Err(e) = action::execute_action(
+                        &on,
+                        room_id,
+                        room_config,
+                        &self.publisher,
+                        &self.state_tx,
+                        &self.circadian_engine,
+                    )
+                    .await
+                    {
+                        error!("Remote: failed to turn on '{}': {}", room_id, e);
+                    }
+                }
+
+                RemoteActionType::Off => {
+                    info!("Remote: turning off lights in '{}'", room_id);
+                    let off = ActionConfig::LightsOff {
+                        delay_secs: 0,
+                        transition: Some(1),
+                    };
+                    if let Err(e) = action::execute_action(
+                        &off,
+                        room_id,
+                        room_config,
+                        &self.publisher,
+                        &self.state_tx,
+                        &self.circadian_engine,
+                    )
+                    .await
+                    {
+                        error!("Remote: failed to turn off '{}': {}", room_id, e);
+                    }
+                }
+
+                RemoteActionType::BrightnessUp => {
+                    let current = self.state.load();
+                    let current_brightness = current
+                        .rooms
+                        .get(room_id)
+                        .and_then(|rs| rs.current_brightness)
+                        .unwrap_or(128);
+                    let new_brightness = current_brightness.saturating_add(25).min(254);
+
+                    debug!(
+                        "Remote: brightness up in '{}': {} -> {}",
+                        room_id, current_brightness, new_brightness
+                    );
+                    self.set_manual_brightness(room_id, room_config, new_brightness)
+                        .await;
+                }
+
+                RemoteActionType::BrightnessDown => {
+                    let current = self.state.load();
+                    let current_brightness = current
+                        .rooms
+                        .get(room_id)
+                        .and_then(|rs| rs.current_brightness)
+                        .unwrap_or(128);
+                    let new_brightness = current_brightness.saturating_sub(25).max(1);
+
+                    debug!(
+                        "Remote: brightness down in '{}': {} -> {}",
+                        room_id, current_brightness, new_brightness
+                    );
+                    self.set_manual_brightness(room_id, room_config, new_brightness)
+                        .await;
+                }
+
+                RemoteActionType::NightMode => {
+                    info!("Remote: enabling night mode in '{}'", room_id);
+                    let _ = self
+                        .state_tx
+                        .send(StateCommand::UpdateRoomState {
+                            room_id: room_id.clone(),
+                            update: RoomStateUpdate::NightMode(true),
+                        })
+                        .await;
+                    // Pause circadian so night mode sticks
+                    let _ = self
+                        .state_tx
+                        .send(StateCommand::UpdateRoomState {
+                            room_id: room_id.clone(),
+                            update: RoomStateUpdate::CircadianPause {
+                                paused: true,
+                                until: None,
+                            },
+                        })
+                        .await;
+                }
+
+                RemoteActionType::DayMode => {
+                    info!("Remote: resuming day mode in '{}'", room_id);
+                    let _ = self
+                        .state_tx
+                        .send(StateCommand::UpdateRoomState {
+                            room_id: room_id.clone(),
+                            update: RoomStateUpdate::NightMode(false),
+                        })
+                        .await;
+                    // Resume circadian
+                    let _ = self
+                        .state_tx
+                        .send(StateCommand::UpdateRoomState {
+                            room_id: room_id.clone(),
+                            update: RoomStateUpdate::CircadianPause {
+                                paused: false,
+                                until: None,
+                            },
+                        })
+                        .await;
+                    let _ = self
+                        .state_tx
+                        .send(StateCommand::UpdateRoomState {
+                            room_id: room_id.clone(),
+                            update: RoomStateUpdate::LightsOn {
+                                brightness: None,
+                                color_temp_mired: None,
+                                source: UpdateSource::Circadian,
+                            },
+                        })
+                        .await;
+                }
+
+                RemoteActionType::BrightnessStop => {
+                    // No-op: just acknowledges end of continuous dim
+                    debug!("Remote: brightness stop in '{}'", room_id);
+                }
+            }
+        }
+    }
+
+    /// Set brightness manually, pausing circadian.
+    async fn set_manual_brightness(
+        &self,
+        room_id: &str,
+        room_config: &crate::config::types::RoomConfig,
+        brightness: u8,
+    ) {
+        // Pause circadian since this is a manual adjustment
+        let _ = self
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::CircadianPause {
+                    paused: true,
+                    until: None,
+                },
+            })
+            .await;
+
+        let action = ActionConfig::LightsOn {
+            use_circadian: false,
+            brightness: Some(brightness),
+            color_temp_k: None,
+            transition: Some(1),
+        };
+        if let Err(e) = action::execute_action(
+            &action,
+            room_id,
+            room_config,
+            &self.publisher,
+            &self.state_tx,
+            &self.circadian_engine,
+        )
+        .await
+        {
+            error!("Remote: failed to set brightness in '{}': {}", room_id, e);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RemoteActionType {
+    Toggle,
+    On,
+    Off,
+    BrightnessUp,
+    BrightnessDown,
+    BrightnessStop,
+    NightMode,
+    DayMode,
+}
+
+/// Classify a Z2M action string into a built-in remote action.
+/// Covers IKEA, Hue, Aqara, and other common Z2M remote action names.
+fn classify_remote_action(action: &str) -> Option<RemoteActionType> {
+    // Toggle
+    if action == "toggle" {
+        return Some(RemoteActionType::Toggle);
+    }
+
+    // Explicit on/off
+    if action == "on" || action == "power_on" {
+        return Some(RemoteActionType::On);
+    }
+    if action == "off" || action == "power_off" {
+        return Some(RemoteActionType::Off);
+    }
+
+    // Brightness stop/release (check before up/down so "brightness_up_release" matches stop)
+    if action.contains("brightness") && (action.contains("stop") || action.contains("release")) {
+        return Some(RemoteActionType::BrightnessStop);
+    }
+
+    // Brightness up (click or continuous move)
+    if action.contains("brightness") && (action.contains("up") || action.contains("increase")) {
+        return Some(RemoteActionType::BrightnessUp);
+    }
+
+    // Brightness down
+    if action.contains("brightness") && (action.contains("down") || action.contains("decrease")) {
+        return Some(RemoteActionType::BrightnessDown);
+    }
+
+    // Arrow right / right button = night mode
+    if action.contains("right") && !action.contains("release") && !action.contains("stop") {
+        return Some(RemoteActionType::NightMode);
+    }
+
+    // Arrow left / left button = day mode
+    if action.contains("left") && !action.contains("release") && !action.contains("stop") {
+        return Some(RemoteActionType::DayMode);
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_classify_toggle() {
+        assert!(matches!(
+            classify_remote_action("toggle"),
+            Some(RemoteActionType::Toggle)
+        ));
+    }
+
+    #[test]
+    fn test_classify_on_off() {
+        assert!(matches!(
+            classify_remote_action("on"),
+            Some(RemoteActionType::On)
+        ));
+        assert!(matches!(
+            classify_remote_action("off"),
+            Some(RemoteActionType::Off)
+        ));
+        assert!(matches!(
+            classify_remote_action("power_on"),
+            Some(RemoteActionType::On)
+        ));
+    }
+
+    #[test]
+    fn test_classify_brightness() {
+        // IKEA style
+        assert!(matches!(
+            classify_remote_action("brightness_up_click"),
+            Some(RemoteActionType::BrightnessUp)
+        ));
+        assert!(matches!(
+            classify_remote_action("brightness_down_click"),
+            Some(RemoteActionType::BrightnessDown)
+        ));
+        assert!(matches!(
+            classify_remote_action("brightness_move_up"),
+            Some(RemoteActionType::BrightnessUp)
+        ));
+        assert!(matches!(
+            classify_remote_action("brightness_move_down"),
+            Some(RemoteActionType::BrightnessDown)
+        ));
+        // Stop/release
+        assert!(matches!(
+            classify_remote_action("brightness_stop"),
+            Some(RemoteActionType::BrightnessStop)
+        ));
+        assert!(matches!(
+            classify_remote_action("brightness_up_release"),
+            Some(RemoteActionType::BrightnessStop)
+        ));
+    }
+
+    #[test]
+    fn test_classify_arrows() {
+        assert!(matches!(
+            classify_remote_action("arrow_right_click"),
+            Some(RemoteActionType::NightMode)
+        ));
+        assert!(matches!(
+            classify_remote_action("arrow_left_click"),
+            Some(RemoteActionType::DayMode)
+        ));
+        // Release should be ignored
+        assert!(classify_remote_action("arrow_right_release").is_none());
+        assert!(classify_remote_action("arrow_left_release").is_none());
+    }
+
+    #[test]
+    fn test_classify_unknown() {
+        assert!(classify_remote_action("color_temperature_move").is_none());
+        assert!(classify_remote_action("recall_scene_1").is_none());
     }
 }

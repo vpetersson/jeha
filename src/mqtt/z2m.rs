@@ -270,6 +270,25 @@ async fn handle_device_state(
 
     let current = state.load();
 
+    // Check if this is a remote action
+    if let Some(action) = msg.get("action").and_then(|v| v.as_str()) {
+        if !action.is_empty() {
+            let ieee = current
+                .device_map
+                .values()
+                .find(|d| d.friendly_name == device_name)
+                .map(|d| d.ieee_address.clone());
+
+            if let Some(ieee) = ieee {
+                debug!("Remote action '{}' from '{}'", action, device_name);
+                event_bus.publish(Event::RemoteAction {
+                    remote_ieee: ieee,
+                    action: action.to_string(),
+                });
+            }
+        }
+    }
+
     // Check if this is a motion sensor update
     if let Some(occupancy) = msg.get("occupancy").and_then(|v| v.as_bool()) {
         let ieee = current

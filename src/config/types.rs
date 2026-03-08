@@ -135,6 +135,10 @@ pub struct RoomConfig {
     /// Per-room motion timeout override (seconds). When set alongside motion_sensor,
     /// jeha automatically turns lights on/off based on motion without needing automations.
     pub motion_timeout_secs: Option<u64>,
+    /// Remote controls (IEEE addresses) bound to this room.
+    /// Built-in handling: toggle on/off, dimming, arrow_right=night mode, arrow_left=day mode.
+    #[serde(default)]
+    pub remotes: Vec<String>,
     /// Set to false to disable circadian for this room entirely.
     #[serde(default = "default_true")]
     pub circadian_enabled: bool,
