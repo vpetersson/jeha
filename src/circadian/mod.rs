@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::{Timelike, Utc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -12,6 +11,7 @@ use tracing::{debug, info, warn};
 use crate::config::types::{AppConfig, RoomConfig};
 use crate::event::{Event, EventBus};
 use crate::mqtt::publish::Publisher;
+use crate::schedule::LocalNow;
 use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
 
 use curve::{CircadianParams, CircadianTarget, compute_target, parse_time_to_minutes};
@@ -88,15 +88,7 @@ impl CircadianEngine {
     }
 
     fn current_minutes(&self) -> u32 {
-        let now = Utc::now();
-        let tz: chrono_tz::Tz = self
-            .config
-            .general
-            .timezone
-            .parse()
-            .unwrap_or(chrono_tz::UTC);
-        let local = now.with_timezone(&tz);
-        local.hour() * 60 + local.minute()
+        LocalNow::now(&self.config.general.timezone).minutes as u32
     }
 
     fn params_for_room(&self, room_config: &RoomConfig) -> CircadianParams {

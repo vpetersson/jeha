@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::{Timelike, Utc};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
@@ -12,6 +11,7 @@ use crate::circadian::CircadianEngine;
 use crate::config::types::{AppConfig, RoomConfig};
 use crate::event::{Event, EventBus};
 use crate::mqtt::publish::Publisher;
+use crate::schedule::LocalNow;
 use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
 
 /// Activate night mode for a room: push night mode light values, pause circadian, set flag.
@@ -193,7 +193,7 @@ pub async fn deactivate_night_mode(
     Ok(())
 }
 
-/// Scheduled night mode activation/deactivation based on start_time/end_time.
+/// Scheduled night mode activation/deactivation based on schedule predicates.
 pub struct NightModeScheduler {
     config: Arc<AppConfig>,
     state: SharedState,
@@ -231,7 +231,7 @@ impl NightModeScheduler {
     pub async fn run(mut self) {
         let has_schedules = self.config.rooms.values().any(|rc| {
             let enm = rc.effective_night_mode(&self.config.night_mode.defaults);
-            enm.start_time.is_some() && enm.end_time.is_some()
+            enm.schedule.is_some()
         });
 
         if !has_schedules {
@@ -263,18 +263,16 @@ impl NightModeScheduler {
     }
 
     async fn check_schedules(&mut self) {
-        let now_minutes = self.current_minutes();
+        let now = LocalNow::now(&self.config.general.timezone);
         let current = self.state.load();
 
         for (room_id, room_config) in &self.config.rooms {
             let enm = room_config.effective_night_mode(&self.config.night_mode.defaults);
-            let (Some(start), Some(end)) = (&enm.start_time, &enm.end_time) else {
+            let Some(ref schedule) = enm.schedule else {
                 continue;
             };
 
-            let start_mins = parse_time_to_minutes(start);
-            let end_mins = parse_time_to_minutes(end);
-            let in_window = is_time_in_range(now_minutes, start_mins, end_mins);
+            let in_window = schedule.matches(&now);
 
             let is_active = current
                 .rooms
@@ -313,60 +311,5 @@ impl NightModeScheduler {
                 self.suppressed.remove(room_id);
             }
         }
-    }
-
-    fn current_minutes(&self) -> u32 {
-        let now = Utc::now();
-        let tz: chrono_tz::Tz = self
-            .config
-            .general
-            .timezone
-            .parse()
-            .unwrap_or(chrono_tz::UTC);
-        let local = now.with_timezone(&tz);
-        local.hour() * 60 + local.minute()
-    }
-}
-
-fn parse_time_to_minutes(time: &str) -> u32 {
-    let parts: Vec<&str> = time.split(':').collect();
-    if parts.len() == 2 {
-        let h: u32 = parts[0].parse().unwrap_or(23);
-        let m: u32 = parts[1].parse().unwrap_or(0);
-        h * 60 + m
-    } else {
-        23 * 60 // fallback: 23:00
-    }
-}
-
-/// Check if `now` is within the range [start, end), handling midnight crossover.
-fn is_time_in_range(now: u32, start: u32, end: u32) -> bool {
-    if start <= end {
-        now >= start && now < end
-    } else {
-        // Crosses midnight (e.g., 23:00 - 06:00)
-        now >= start || now < end
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_time_in_range_normal() {
-        // 09:00 - 17:00
-        assert!(is_time_in_range(600, 540, 1020)); // 10:00 in 09:00-17:00
-        assert!(!is_time_in_range(480, 540, 1020)); // 08:00 not in 09:00-17:00
-    }
-
-    #[test]
-    fn test_time_in_range_midnight_crossover() {
-        // 23:00 - 06:00
-        let start = 23 * 60; // 1380
-        let end = 6 * 60; // 360
-        assert!(is_time_in_range(1400, start, end)); // 23:20 in range
-        assert!(is_time_in_range(120, start, end)); // 02:00 in range
-        assert!(!is_time_in_range(720, start, end)); // 12:00 not in range
     }
 }

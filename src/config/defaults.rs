@@ -1,3 +1,5 @@
+use crate::schedule::Schedule;
+
 use super::types::*;
 
 impl Default for MqttConfig {
@@ -90,8 +92,7 @@ impl RoomConfig {
     pub fn effective_night_mode(&self, defaults: &NightModeDefaults) -> EffectiveNightMode {
         match &self.night_mode {
             Some(nm) => EffectiveNightMode {
-                start_time: nm.start_time.clone(),
-                end_time: nm.end_time.clone(),
+                schedule: nm.schedule.clone(),
                 color_temp_k: nm.color_temp_k.unwrap_or(defaults.color_temp_k),
                 brightness: nm.brightness.unwrap_or(defaults.brightness),
                 motion_timeout_secs: nm
@@ -99,8 +100,7 @@ impl RoomConfig {
                     .unwrap_or(defaults.motion_timeout_secs),
             },
             None => EffectiveNightMode {
-                start_time: None,
-                end_time: None,
+                schedule: None,
                 color_temp_k: defaults.color_temp_k,
                 brightness: defaults.brightness,
                 motion_timeout_secs: defaults.motion_timeout_secs,
@@ -110,8 +110,7 @@ impl RoomConfig {
 }
 
 pub struct EffectiveNightMode {
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
+    pub schedule: Option<Schedule>,
     pub color_temp_k: u16,
     pub brightness: u8,
     pub motion_timeout_secs: u64,

@@ -76,6 +76,87 @@ circadian_enabled = false
 
 jeha auto-discovers new Z2M groups with lights and appends them to the config file. Restart or send SIGHUP to apply.
 
+### Night mode
+
+Night mode sets lights to the warmest color and minimum brightness. Enable on a schedule:
+
+```toml
+[rooms.bedroom.night_mode]
+schedule = { after = "22:00", before = "06:30" }
+```
+
+Override night mode light values per room:
+
+```toml
+[rooms.bedroom.night_mode]
+schedule = { after = "22:00", before = "06:30" }
+color_temp_k = 2000
+brightness = 5
+motion_timeout_secs = 60
+```
+
+### Schedules
+
+jeha has a unified schedule predicate engine for time-based gating. Schedules support time ranges (with midnight crossover), day-of-week filters, and month filters. All present fields are ANDed; empty filters match everything.
+
+Simple time window:
+
+```toml
+schedule = { after = "22:00", before = "06:30" }
+```
+
+With day filter (weekdays only):
+
+```toml
+schedule = { after = "08:00", before = "17:00", days = ["mon", "tue", "wed", "thu", "fri"] }
+```
+
+With month filter (winter mornings):
+
+```toml
+schedule = { after = "06:00", before = "09:00", months = ["oct", "nov", "dec", "jan", "feb"] }
+```
+
+Composite (weekday evenings OR weekend all-evening):
+
+```toml
+[rooms.living.night_mode]
+schedule.any = [
+    { after = "22:00", before = "06:00", days = ["mon", "tue", "wed", "thu", "fri"] },
+    { after = "20:00", before = "08:00", days = ["sat", "sun"] },
+]
+```
+
+Schedules can be used in:
+- **Night mode**: `rooms.<name>.night_mode.schedule`
+- **Motion gating**: `rooms.<name>.motion_schedule` — built-in motion handling only runs when the schedule matches
+- **Automations**: `automations[].schedule` — automation only fires when the schedule matches
+
+Motion schedule example (office motion only on weekdays during work hours):
+
+```toml
+[rooms.office]
+z2m_group = "Office"
+motion_sensor = "0x00158d000AAAAAAA"
+motion_schedule = { after = "08:00", before = "17:00", days = ["mon", "tue", "wed", "thu", "fri"] }
+```
+
+Automation with schedule gate:
+
+```toml
+[[automations]]
+id = "winter_mornings"
+rooms = ["office"]
+schedule = { after = "06:00", before = "09:00", months = ["oct", "nov", "dec", "jan", "feb"] }
+[automations.trigger]
+type = "motion"
+[automations.action]
+type = "lights_on"
+use_circadian = true
+```
+
+### Lights-out
+
 Lights-out turns off all lights at 01:00 by default. Configure or disable:
 
 ```toml

@@ -2,12 +2,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
-use chrono::{Timelike, Utc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::config::types::AppConfig;
 use crate::mqtt::publish::Publisher;
+use crate::schedule::LocalNow;
 use crate::state::{RoomStateUpdate, SharedState, StateCommand};
 
 pub struct LightsOutTask {
@@ -41,7 +41,11 @@ impl LightsOutTask {
             return;
         }
 
-        let target_minutes = parse_time_to_minutes(&self.config.lights_out.time);
+        let target_minutes = {
+            let tod = crate::schedule::TimeOfDay::from_hm_str(&self.config.lights_out.time)
+                .unwrap_or_else(|_| crate::schedule::TimeOfDay::from_hm_str("01:00").unwrap());
+            tod.as_minutes() as u32
+        };
         info!(
             "Lights-out task started (target: {})",
             self.config.lights_out.time
@@ -57,7 +61,8 @@ impl LightsOutTask {
                     return;
                 }
                 _ = interval.tick() => {
-                    let now_minutes = self.current_minutes();
+                    let now = LocalNow::now(&self.config.general.timezone);
+                    let now_minutes = now.minutes as u32;
 
                     // Reset the flag when we move past the target window
                     if now_minutes.abs_diff(target_minutes) > 2 {
@@ -74,18 +79,6 @@ impl LightsOutTask {
                 }
             }
         }
-    }
-
-    fn current_minutes(&self) -> u32 {
-        let now = Utc::now();
-        let tz: chrono_tz::Tz = self
-            .config
-            .general
-            .timezone
-            .parse()
-            .unwrap_or(chrono_tz::UTC);
-        let local = now.with_timezone(&tz);
-        local.hour() * 60 + local.minute()
     }
 
     async fn turn_off_all(&self) -> Result<()> {
@@ -128,16 +121,5 @@ impl LightsOutTask {
 
         info!("Lights-out complete");
         Ok(())
-    }
-}
-
-fn parse_time_to_minutes(time: &str) -> u32 {
-    let parts: Vec<&str> = time.split(':').collect();
-    if parts.len() == 2 {
-        let h: u32 = parts[0].parse().unwrap_or(1);
-        let m: u32 = parts[1].parse().unwrap_or(0);
-        h * 60 + m
-    } else {
-        60 // fallback: 01:00
     }
 }

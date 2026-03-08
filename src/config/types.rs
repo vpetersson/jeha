@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::schedule::Schedule;
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AppConfig {
     pub schema_version: u32,
@@ -135,6 +137,9 @@ pub struct RoomConfig {
     /// Per-room motion timeout override (seconds). When set alongside motion_sensor,
     /// jeha automatically turns lights on/off based on motion without needing automations.
     pub motion_timeout_secs: Option<u64>,
+    /// Schedule gate for built-in motion handling. When set, motion events are only
+    /// processed when the current time matches this schedule.
+    pub motion_schedule: Option<Schedule>,
     /// Remote controls (IEEE addresses) bound to this room.
     /// Built-in handling: toggle on/off, dimming, arrow_right=night mode, arrow_left=day mode.
     #[serde(default)]
@@ -182,8 +187,8 @@ pub struct CircadianOverride {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct NightModeOverride {
-    pub start_time: Option<String>,
-    pub end_time: Option<String>,
+    /// Schedule predicate for automatic night mode activation/deactivation.
+    pub schedule: Option<Schedule>,
     pub color_temp_k: Option<u16>,
     pub brightness: Option<u8>,
     pub motion_timeout_secs: Option<u64>,
@@ -196,8 +201,10 @@ pub struct AutomationConfig {
     pub trigger: TriggerConfig,
     pub action: ActionConfig,
     pub off_action: Option<ActionConfig>,
+    /// Schedule gate: automation only fires when the current time matches.
+    pub schedule: Option<Schedule>,
     #[serde(default)]
-    pub conditions: Vec<serde_json::Value>,
+    pub conditions: Vec<crate::automation::condition::ConditionConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -205,8 +212,6 @@ pub struct AutomationConfig {
 pub enum TriggerConfig {
     Motion,
     MotionCleared,
-    Time { cron: String },
-    StateChange { device: String, attribute: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

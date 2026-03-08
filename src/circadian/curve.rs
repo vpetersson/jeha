@@ -95,10 +95,9 @@ pub fn compute_target(params: &CircadianParams, current_minutes: u32) -> Circadi
 }
 
 pub fn parse_time_to_minutes(time_str: &str) -> u32 {
-    let parts: Vec<&str> = time_str.split(':').collect();
-    let hour: u32 = parts[0].parse().unwrap_or(0);
-    let minute: u32 = parts.get(1).and_then(|m| m.parse().ok()).unwrap_or(0);
-    hour * 60 + minute
+    crate::schedule::TimeOfDay::from_hm_str(time_str)
+        .map(|tod| tod.as_minutes() as u32)
+        .unwrap_or(0)
 }
 
 #[cfg(test)]

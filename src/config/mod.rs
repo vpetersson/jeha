@@ -80,8 +80,7 @@ peak_temp_k = 5500
 peak_brightness = 254
 
 [rooms.kitchen.night_mode]
-start_time = "22:30"
-end_time = "06:30"
+schedule = { after = "22:30", before = "06:30" }
 
 [rooms.office]
 display_name = "Office"

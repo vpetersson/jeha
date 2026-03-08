@@ -1,6 +1,8 @@
 use anyhow::{Result, bail};
 use tracing::warn;
 
+use crate::schedule::{self, TimeOfDay};
+
 use super::types::AppConfig;
 
 pub fn validate_config(config: &AppConfig) -> Result<()> {
@@ -38,6 +40,10 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
             );
         }
 
+        if let Some(ref sched) = room.motion_schedule {
+            schedule::validate_schedule(sched, &format!("rooms.{}.motion_schedule", room_id))?;
+        }
+
         if let Some(ref circ) = room.circadian {
             if let Some(ref wt) = circ.wake_time {
                 validate_time_str(wt, &format!("rooms.{}.circadian.wake_time", room_id))?;
@@ -57,11 +63,11 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
         }
 
         if let Some(ref nm) = room.night_mode {
-            if let Some(ref st) = nm.start_time {
-                validate_time_str(st, &format!("rooms.{}.night_mode.start_time", room_id))?;
-            }
-            if let Some(ref et) = nm.end_time {
-                validate_time_str(et, &format!("rooms.{}.night_mode.end_time", room_id))?;
+            if let Some(ref sched) = nm.schedule {
+                schedule::validate_schedule(
+                    sched,
+                    &format!("rooms.{}.night_mode.schedule", room_id),
+                )?;
             }
         }
     }
@@ -113,6 +119,12 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
                 }
             }
         }
+        if let Some(ref sched) = automation.schedule {
+            schedule::validate_schedule(
+                sched,
+                &format!("automations.{}.schedule", automation.id),
+            )?;
+        }
     }
 
     Ok(())
@@ -137,27 +149,8 @@ fn validate_ieee(addr: &str, field: &str) -> Result<()> {
 }
 
 fn validate_time_str(time: &str, field: &str) -> Result<()> {
-    let parts: Vec<&str> = time.split(':').collect();
-    if parts.len() != 2 {
-        bail!(
-            "Invalid time '{}' in {}: expected HH:MM format.",
-            time,
-            field
-        );
-    }
-    let hour: u32 = parts[0]
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Invalid hour in time '{}' at {}.", time, field))?;
-    let minute: u32 = parts[1]
-        .parse()
-        .map_err(|_| anyhow::anyhow!("Invalid minute in time '{}' at {}.", time, field))?;
-    if hour > 23 || minute > 59 {
-        bail!(
-            "Invalid time '{}' in {}: hour must be 0-23, minute 0-59.",
-            time,
-            field
-        );
-    }
+    TimeOfDay::from_hm_str(time)
+        .map_err(|e| anyhow::anyhow!("{} in {}", e, field))?;
     Ok(())
 }
 

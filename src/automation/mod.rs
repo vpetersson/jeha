@@ -137,6 +137,29 @@ impl AutomationEngine {
                     continue;
                 }
 
+                // Schedule gate
+                if let Some(ref schedule) = config.schedule {
+                    let now = crate::schedule::LocalNow::now(&self.config.general.timezone);
+                    if !schedule.matches(&now) {
+                        debug!(
+                            "Automation '{}' schedule not active for room '{}'",
+                            auto_id, room_id
+                        );
+                        continue;
+                    }
+                }
+
+                // Conditions gate
+                if !config.conditions.iter().all(|c| {
+                    condition::evaluate_condition(c, &self.state)
+                }) {
+                    debug!(
+                        "Automation '{}' conditions not met for room '{}'",
+                        auto_id, room_id
+                    );
+                    continue;
+                }
+
                 info!("Automation '{}' triggered for room '{}'", auto_id, room_id);
 
                 let publisher = self.publisher.clone();
@@ -201,6 +224,18 @@ impl AutomationEngine {
                     .collect();
 
                 for (room_id, room_config) in rooms {
+                    // Motion schedule gate
+                    if let Some(ref sched) = room_config.motion_schedule {
+                        let now = crate::schedule::LocalNow::now(&self.config.general.timezone);
+                        if !sched.matches(&now) {
+                            debug!(
+                                "Built-in motion: skipping '{}' — motion_schedule not active",
+                                room_id
+                            );
+                            continue;
+                        }
+                    }
+
                     // Cancel any pending off-timer
                     if let Some(handle) = self.motion_off_handles.remove(&room_id) {
                         handle.abort();
@@ -282,6 +317,18 @@ impl AutomationEngine {
                     .collect();
 
                 for (room_id, room_config, mut timeout_secs) in rooms {
+                    // Motion schedule gate
+                    if let Some(ref sched) = room_config.motion_schedule {
+                        let now = crate::schedule::LocalNow::now(&self.config.general.timezone);
+                        if !sched.matches(&now) {
+                            debug!(
+                                "Built-in motion: skipping clear for '{}' — motion_schedule not active",
+                                room_id
+                            );
+                            continue;
+                        }
+                    }
+
                     // Use night mode timeout if active
                     let current = self.state.load();
                     let is_night_mode = current
