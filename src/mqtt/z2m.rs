@@ -271,21 +271,21 @@ async fn handle_device_state(
     let current = state.load();
 
     // Check if this is a remote action
-    if let Some(action) = msg.get("action").and_then(|v| v.as_str()) {
-        if !action.is_empty() {
-            let ieee = current
-                .device_map
-                .values()
-                .find(|d| d.friendly_name == device_name)
-                .map(|d| d.ieee_address.clone());
+    if let Some(action) = msg.get("action").and_then(|v| v.as_str())
+        && !action.is_empty()
+    {
+        let ieee = current
+            .device_map
+            .values()
+            .find(|d| d.friendly_name == device_name)
+            .map(|d| d.ieee_address.clone());
 
-            if let Some(ieee) = ieee {
-                debug!("Remote action '{}' from '{}'", action, device_name);
-                event_bus.publish(Event::RemoteAction {
-                    remote_ieee: ieee,
-                    action: action.to_string(),
-                });
-            }
+        if let Some(ieee) = ieee {
+            debug!("Remote action '{}' from '{}'", action, device_name);
+            event_bus.publish(Event::RemoteAction {
+                remote_ieee: ieee,
+                action: action.to_string(),
+            });
         }
     }
 
@@ -322,25 +322,25 @@ async fn handle_device_state(
     if (is_on || is_off)
         && let Some(room_id) = find_room_for_device(device_name, &current, config)
     {
-            if is_on {
-                let brightness = has_brightness.map(|b| b as u8);
-                let color_temp = has_color_temp.map(|ct| ct as u16);
-                // Only set lights_on state, don't change update_source
-                // (that's handled by external change detection below)
-                let room_state = current.rooms.get(&room_id);
-                let source = room_state
-                    .map(|rs| rs.update_source)
-                    .unwrap_or(UpdateSource::Circadian);
-                let _ = state_tx
-                    .send(StateCommand::UpdateRoomState {
-                        room_id: room_id.clone(),
-                        update: RoomStateUpdate::LightsOn {
-                            brightness,
-                            color_temp_mired: color_temp,
-                            source,
-                        },
-                    })
-                    .await;
+        if is_on {
+            let brightness = has_brightness.map(|b| b as u8);
+            let color_temp = has_color_temp.map(|ct| ct as u16);
+            // Only set lights_on state, don't change update_source
+            // (that's handled by external change detection below)
+            let room_state = current.rooms.get(&room_id);
+            let source = room_state
+                .map(|rs| rs.update_source)
+                .unwrap_or(UpdateSource::Circadian);
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.clone(),
+                    update: RoomStateUpdate::LightsOn {
+                        brightness,
+                        color_temp_mired: color_temp,
+                        source,
+                    },
+                })
+                .await;
         } else {
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {

@@ -223,8 +223,7 @@ impl McpToolHandler {
             "set_night_mode" => {
                 let room_id = args["room_id"].as_str().ok_or("room_id is required")?;
                 let active = args["active"].as_bool().ok_or("active is required")?;
-                self.set_night_mode(room_id, active)
-                    .await
+                self.set_night_mode(room_id, active).await
             }
             "set_scene" => {
                 let room_id = args["room_id"].as_str().ok_or("room_id is required")?;
@@ -294,9 +293,7 @@ impl McpToolHandler {
                 let has_motion = room_config
                     .map(|r| r.motion_sensor.is_some())
                     .unwrap_or(false);
-                let remotes = room_config
-                    .map(|r| r.remotes.clone())
-                    .unwrap_or_default();
+                let remotes = room_config.map(|r| r.remotes.clone()).unwrap_or_default();
                 let motion_timeout_secs = room_config.and_then(|r| {
                     r.effective_motion_timeout(self.config.general.motion_timeout_secs)
                 });

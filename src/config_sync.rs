@@ -119,7 +119,10 @@ impl ConfigSync {
                 "\n[rooms.{}]\ndisplay_name = \"{}\"\nz2m_group = \"{}\"\n",
                 room_id, group_name, group_name
             ));
-            info!("Auto-discovered new room: '{}' (group '{}')", room_id, group_name);
+            info!(
+                "Auto-discovered new room: '{}' (group '{}')",
+                room_id, group_name
+            );
         }
 
         // Read existing config, append, write back atomically (temp file + rename)

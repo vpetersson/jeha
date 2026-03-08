@@ -32,7 +32,14 @@ pub async fn start_mcp_server(
 ) -> Result<()> {
     info!("Starting MCP server on {}", bind_addr);
 
-    let handler = Arc::new(McpToolHandler::new(state, state_tx, publisher, config, event_bus, circadian_engine));
+    let handler = Arc::new(McpToolHandler::new(
+        state,
+        state_tx,
+        publisher,
+        config,
+        event_bus,
+        circadian_engine,
+    ));
 
     let addr: std::net::SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

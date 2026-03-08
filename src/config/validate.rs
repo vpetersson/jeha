@@ -62,13 +62,10 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
             }
         }
 
-        if let Some(ref nm) = room.night_mode {
-            if let Some(ref sched) = nm.schedule {
-                schedule::validate_schedule(
-                    sched,
-                    &format!("rooms.{}.night_mode.schedule", room_id),
-                )?;
-            }
+        if let Some(ref nm) = room.night_mode
+            && let Some(ref sched) = nm.schedule
+        {
+            schedule::validate_schedule(sched, &format!("rooms.{}.night_mode.schedule", room_id))?;
         }
     }
 
@@ -120,10 +117,7 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
             }
         }
         if let Some(ref sched) = automation.schedule {
-            schedule::validate_schedule(
-                sched,
-                &format!("automations.{}.schedule", automation.id),
-            )?;
+            schedule::validate_schedule(sched, &format!("automations.{}.schedule", automation.id))?;
         }
     }
 
@@ -149,8 +143,7 @@ fn validate_ieee(addr: &str, field: &str) -> Result<()> {
 }
 
 fn validate_time_str(time: &str, field: &str) -> Result<()> {
-    TimeOfDay::from_hm_str(time)
-        .map_err(|e| anyhow::anyhow!("{} in {}", e, field))?;
+    TimeOfDay::from_hm_str(time).map_err(|e| anyhow::anyhow!("{} in {}", e, field))?;
     Ok(())
 }
 

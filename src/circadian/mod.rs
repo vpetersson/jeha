@@ -119,14 +119,14 @@ impl CircadianEngine {
         let mut range_max: Option<u16> = None;
 
         for member in &group.members {
-            if let Some(device) = current.device_map.get(&member.ieee_address) {
-                if device.supports_color_temp {
-                    if let Some(dev_min) = device.color_temp_min {
-                        range_min = Some(range_min.map_or(dev_min, |cur: u16| cur.max(dev_min)));
-                    }
-                    if let Some(dev_max) = device.color_temp_max {
-                        range_max = Some(range_max.map_or(dev_max, |cur: u16| cur.min(dev_max)));
-                    }
+            if let Some(device) = current.device_map.get(&member.ieee_address)
+                && device.supports_color_temp
+            {
+                if let Some(dev_min) = device.color_temp_min {
+                    range_min = Some(range_min.map_or(dev_min, |cur: u16| cur.max(dev_min)));
+                }
+                if let Some(dev_max) = device.color_temp_max {
+                    range_max = Some(range_max.map_or(dev_max, |cur: u16| cur.min(dev_max)));
                 }
             }
         }
@@ -271,12 +271,7 @@ impl CircadianEngine {
             if let Some(ref group) = room_config.z2m_group {
                 published_ct = self.clamp_color_temp_for_group(group, target.color_temp_mired);
                 self.publisher
-                    .push_circadian_group(
-                        group,
-                        target.brightness,
-                        published_ct,
-                        transition,
-                    )
+                    .push_circadian_group(group, target.brightness, published_ct, transition)
                     .await?;
             } else {
                 published_ct = target.color_temp_mired;
@@ -291,12 +286,7 @@ impl CircadianEngine {
                         None
                     };
                     self.publisher
-                        .turn_on_ieee(
-                            ieee,
-                            Some(target.brightness),
-                            ct,
-                            Some(transition),
-                        )
+                        .turn_on_ieee(ieee, Some(target.brightness), ct, Some(transition))
                         .await?;
                 }
             }
@@ -386,12 +376,7 @@ impl CircadianEngine {
             };
 
             self.publisher
-                .turn_on_ieee(
-                    ieee,
-                    Some(target.brightness),
-                    ct,
-                    Some(3),
-                )
+                .turn_on_ieee(ieee, Some(target.brightness), ct, Some(3))
                 .await?;
 
             let _ = self

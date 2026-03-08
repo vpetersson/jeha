@@ -23,10 +23,7 @@ impl TimeOfDay {
             .parse()
             .map_err(|_| anyhow::anyhow!("Invalid minute in time '{}'", s))?;
         if hour > 23 || minute > 59 {
-            bail!(
-                "Invalid time '{}': hour must be 0-23, minute 0-59",
-                s
-            );
+            bail!("Invalid time '{}': hour must be 0-23, minute 0-59", s);
         }
         Ok(Self(hour * 60 + minute))
     }
@@ -160,10 +157,10 @@ impl TimeWindow {
             if (now.minutes as u32) < after.as_minutes() as u32 {
                 return false;
             }
-        } else if let Some(before) = self.before {
-            if (now.minutes as u32) >= before.as_minutes() as u32 {
-                return false;
-            }
+        } else if let Some(before) = self.before
+            && (now.minutes as u32) >= before.as_minutes() as u32
+        {
+            return false;
         }
 
         // Check day filter
@@ -232,8 +229,7 @@ pub fn validate_schedule(schedule: &Schedule, field: &str) -> Result<()> {
     match schedule {
         Schedule::Window(w) => {
             // TimeOfDay values are already validated on parse; nothing extra needed
-            if w.after.is_none() && w.before.is_none() && w.days.is_empty() && w.months.is_empty()
-            {
+            if w.after.is_none() && w.before.is_none() && w.days.is_empty() && w.months.is_empty() {
                 // Valid: matches everything (no-op window)
             }
             let _ = (w, field);
@@ -283,10 +279,7 @@ mod tests {
     #[test]
     fn test_time_of_day_parse() {
         assert_eq!(TimeOfDay::from_hm_str("06:00").unwrap().as_minutes(), 360);
-        assert_eq!(
-            TimeOfDay::from_hm_str("23:59").unwrap().as_minutes(),
-            1439
-        );
+        assert_eq!(TimeOfDay::from_hm_str("23:59").unwrap().as_minutes(), 1439);
         assert_eq!(TimeOfDay::from_hm_str("00:00").unwrap().as_minutes(), 0);
         assert!(TimeOfDay::from_hm_str("24:00").is_err());
         assert!(TimeOfDay::from_hm_str("12:60").is_err());
@@ -295,8 +288,14 @@ mod tests {
 
     #[test]
     fn test_time_of_day_display() {
-        assert_eq!(TimeOfDay::from_hm_str("06:00").unwrap().to_string(), "06:00");
-        assert_eq!(TimeOfDay::from_hm_str("23:59").unwrap().to_string(), "23:59");
+        assert_eq!(
+            TimeOfDay::from_hm_str("06:00").unwrap().to_string(),
+            "06:00"
+        );
+        assert_eq!(
+            TimeOfDay::from_hm_str("23:59").unwrap().to_string(),
+            "23:59"
+        );
     }
 
     #[test]
@@ -338,7 +337,13 @@ mod tests {
         let w = TimeWindow {
             after: Some(TimeOfDay::from_hm_str("08:00").unwrap()),
             before: Some(TimeOfDay::from_hm_str("17:00").unwrap()),
-            days: vec![DayOfWeek::Mon, DayOfWeek::Tue, DayOfWeek::Wed, DayOfWeek::Thu, DayOfWeek::Fri],
+            days: vec![
+                DayOfWeek::Mon,
+                DayOfWeek::Tue,
+                DayOfWeek::Wed,
+                DayOfWeek::Thu,
+                DayOfWeek::Fri,
+            ],
             months: vec![],
         };
         // Weekday, in time range
@@ -380,7 +385,13 @@ mod tests {
                 Schedule::Window(TimeWindow {
                     after: Some(TimeOfDay::from_hm_str("22:00").unwrap()),
                     before: Some(TimeOfDay::from_hm_str("06:00").unwrap()),
-                    days: vec![DayOfWeek::Mon, DayOfWeek::Tue, DayOfWeek::Wed, DayOfWeek::Thu, DayOfWeek::Fri],
+                    days: vec![
+                        DayOfWeek::Mon,
+                        DayOfWeek::Tue,
+                        DayOfWeek::Wed,
+                        DayOfWeek::Thu,
+                        DayOfWeek::Fri,
+                    ],
                     months: vec![],
                 }),
                 Schedule::Window(TimeWindow {
@@ -513,5 +524,4 @@ months = ["oct", "nov", "dec", "jan", "feb"]
         let empty_all = Schedule::All { all: vec![] };
         assert!(validate_schedule(&empty_all, "test").is_err());
     }
-
 }

@@ -145,44 +145,43 @@ pub async fn deactivate_night_mode(
         .map(|rs| rs.lights_on)
         .unwrap_or(false);
 
-    if lights_on {
-        if let Some(engine) = circadian_engine {
-            if let Some(target) = engine.compute_room_target(room_id) {
-                let ct_mired = Some(target.color_temp_mired);
-                if let Some(ref group) = room_config.z2m_group {
-                    let _ = publisher
-                        .turn_on_group(group, Some(target.brightness), ct_mired, Some(3))
-                        .await;
-                } else {
-                    for ieee in &room_config.lights {
-                        let _ = publisher
-                            .turn_on_ieee(ieee, Some(target.brightness), ct_mired, Some(3))
-                            .await;
-                    }
-                }
-
-                let _ = state_tx
-                    .send(StateCommand::UpdateRoomState {
-                        room_id: room_id.to_string(),
-                        update: RoomStateUpdate::LightsOn {
-                            brightness: Some(target.brightness),
-                            color_temp_mired: ct_mired,
-                            source: UpdateSource::Circadian,
-                        },
-                    })
-                    .await;
-
-                let _ = state_tx
-                    .send(StateCommand::UpdateRoomState {
-                        room_id: room_id.to_string(),
-                        update: RoomStateUpdate::JehaPush {
-                            brightness: Some(target.brightness),
-                            color_temp_mired: ct_mired,
-                        },
-                    })
+    if lights_on
+        && let Some(engine) = circadian_engine
+        && let Some(target) = engine.compute_room_target(room_id)
+    {
+        let ct_mired = Some(target.color_temp_mired);
+        if let Some(ref group) = room_config.z2m_group {
+            let _ = publisher
+                .turn_on_group(group, Some(target.brightness), ct_mired, Some(3))
+                .await;
+        } else {
+            for ieee in &room_config.lights {
+                let _ = publisher
+                    .turn_on_ieee(ieee, Some(target.brightness), ct_mired, Some(3))
                     .await;
             }
         }
+
+        let _ = state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::LightsOn {
+                    brightness: Some(target.brightness),
+                    color_temp_mired: ct_mired,
+                    source: UpdateSource::Circadian,
+                },
+            })
+            .await;
+
+        let _ = state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::JehaPush {
+                    brightness: Some(target.brightness),
+                    color_temp_mired: ct_mired,
+                },
+            })
+            .await;
     }
 
     event_bus.publish(Event::NightModeChanged {
