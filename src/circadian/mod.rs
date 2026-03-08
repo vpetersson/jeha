@@ -119,14 +119,14 @@ impl CircadianEngine {
         let mut range_max: Option<u16> = None;
 
         for member in &group.members {
-            if let Some(device) = current.device_map.get(&member.ieee_address) {
-                if device.supports_color_temp {
-                    if let Some(dev_min) = device.color_temp_min {
-                        range_min = Some(range_min.map_or(dev_min, |cur: u16| cur.max(dev_min)));
-                    }
-                    if let Some(dev_max) = device.color_temp_max {
-                        range_max = Some(range_max.map_or(dev_max, |cur: u16| cur.min(dev_max)));
-                    }
+            if let Some(device) = current.device_map.get(&member.ieee_address)
+                && device.supports_color_temp
+            {
+                if let Some(dev_min) = device.color_temp_min {
+                    range_min = Some(range_min.map_or(dev_min, |cur: u16| cur.max(dev_min)));
+                }
+                if let Some(dev_max) = device.color_temp_max {
+                    range_max = Some(range_max.map_or(dev_max, |cur: u16| cur.min(dev_max)));
                 }
             }
         }

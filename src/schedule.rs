@@ -157,10 +157,10 @@ impl TimeWindow {
             if (now.minutes as u32) < after.as_minutes() as u32 {
                 return false;
             }
-        } else if let Some(before) = self.before {
-            if (now.minutes as u32) >= before.as_minutes() as u32 {
-                return false;
-            }
+        } else if let Some(before) = self.before
+            && (now.minutes as u32) >= before.as_minutes() as u32
+        {
+            return false;
         }
 
         // Check day filter

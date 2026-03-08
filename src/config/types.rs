@@ -186,9 +186,7 @@ impl RoomConfig {
     /// Returns the effective motion timeout for this room, or None if
     /// the room has no motion sensor.
     pub fn effective_motion_timeout(&self, global_default: u64) -> Option<u64> {
-        if self.motion_sensor.is_none() {
-            return None;
-        }
+        self.motion_sensor.as_ref()?;
         Some(self.motion_timeout_secs.unwrap_or(global_default))
     }
 }

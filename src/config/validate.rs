@@ -62,13 +62,10 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
             }
         }
 
-        if let Some(ref nm) = room.night_mode {
-            if let Some(ref sched) = nm.schedule {
-                schedule::validate_schedule(
-                    sched,
-                    &format!("rooms.{}.night_mode.schedule", room_id),
-                )?;
-            }
+        if let Some(ref nm) = room.night_mode
+            && let Some(ref sched) = nm.schedule
+        {
+            schedule::validate_schedule(sched, &format!("rooms.{}.night_mode.schedule", room_id))?;
         }
     }
 
