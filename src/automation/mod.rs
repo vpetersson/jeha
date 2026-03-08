@@ -772,56 +772,107 @@ enum RemoteActionType {
 }
 
 /// Classify a Z2M action string into a built-in remote action.
-/// Covers IKEA STYRBAR, TRADFRI remote, RODRET dimmer, and other common remotes.
+///
+/// Tested against:
+/// - IKEA: STYRBAR (E2001/E2002/E2313), TRADFRI remote (E1524/E1810),
+///   RODRET (E2201), ON/OFF switch (E1743)
+/// - Philips Hue: Dimmer switch v1/v2, Smart button, Wall switch module
+/// - Aqara: Mini switch (WXKG11LM)
+/// - Sonoff: SNZB-01/SNZB-01P
+/// - Tuya: TS004F, scene switches
+///
+/// Multi-button devices (SOMRIG, Aqara Opple, Tuya TS0042+) use numbered
+/// action prefixes (e.g. "1_single", "button_2_hold") which are not mapped
+/// here — they require user-defined automations.
 fn classify_remote_action(action: &str) -> Option<RemoteActionType> {
-    // Toggle (center button on TRADFRI remote)
-    // "toggle_hold" is ignored — no useful mapping
-    if action == "toggle" {
-        return Some(RemoteActionType::Toggle);
-    }
+    // --- Release/stop events (check first to avoid false matches) ---
 
-    // Explicit on/off (STYRBAR, RODRET)
-    if action == "on" || action == "power_on" {
-        return Some(RemoteActionType::On);
-    }
-    if action == "off" || action == "power_off" {
-        return Some(RemoteActionType::Off);
-    }
-
-    // Brightness stop/release — must check before up/down
-    // Matches: brightness_stop, brightness_up_release, brightness_down_release
+    // Brightness stop: brightness_stop, brightness_up_release, brightness_down_release
     if action.contains("brightness") && (action.contains("stop") || action.contains("release")) {
         return Some(RemoteActionType::BrightnessStop);
     }
 
-    // Brightness up
-    if action.contains("brightness") && (action.contains("up") || action.contains("increase")) {
-        // "brightness_up_click" = single step (TRADFRI)
-        // "brightness_up_hold" / "brightness_move_up" = continuous (TRADFRI / STYRBAR+RODRET)
-        if action.contains("click") {
-            return Some(RemoteActionType::BrightnessUpStep);
-        }
-        return Some(RemoteActionType::BrightnessUpHold);
+    // Hue dimmer: up_press_release, up_hold_release, down_press_release, down_hold_release
+    if (action.starts_with("up_") || action.starts_with("down_")) && action.ends_with("_release") {
+        return Some(RemoteActionType::BrightnessStop);
     }
 
-    // Brightness down
+    // All other *_release / *_hold_release events — no-op
+    if action.ends_with("_release") {
+        return None;
+    }
+
+    // --- Toggle ---
+    // IKEA TRADFRI remote: "toggle", Tuya knobs: "toggle"
+    // Aqara mini / Sonoff / Tuya 1-button: "single"
+    // "toggle_hold" falls through to None
+    if action == "toggle" || action == "single" {
+        return Some(RemoteActionType::Toggle);
+    }
+
+    // --- On/Off ---
+    // IKEA STYRBAR/RODRET/E1743: "on", "off"
+    // Hue smart button: "on", "off"
+    if action == "on" || action == "power_on" || action == "on_press" {
+        return Some(RemoteActionType::On);
+    }
+    if action == "off" || action == "power_off" || action == "off_press" {
+        return Some(RemoteActionType::Off);
+    }
+
+    // --- Brightness step (single press) ---
+    // IKEA TRADFRI: brightness_up_click, brightness_down_click
+    // Tuya knobs: brightness_step_up, brightness_step_down
+    // Hue dimmer: up_press, down_press
+    if action.contains("brightness") && (action.contains("up") || action.contains("increase")) {
+        if action.contains("click") || action.contains("step") {
+            return Some(RemoteActionType::BrightnessUpStep);
+        }
+        // brightness_move_up (IKEA), brightness_up_hold (TRADFRI) = continuous
+        return Some(RemoteActionType::BrightnessUpHold);
+    }
     if action.contains("brightness") && (action.contains("down") || action.contains("decrease")) {
-        if action.contains("click") {
+        if action.contains("click") || action.contains("step") {
             return Some(RemoteActionType::BrightnessDownStep);
         }
         return Some(RemoteActionType::BrightnessDownHold);
     }
 
-    // Arrow right click = night mode (STYRBAR, TRADFRI)
-    // Hold/release ignored
+    // Hue dimmer: up_press = brightness step, up_hold = continuous
+    if action == "up_press" {
+        return Some(RemoteActionType::BrightnessUpStep);
+    }
+    if action == "down_press" {
+        return Some(RemoteActionType::BrightnessDownStep);
+    }
+    if action == "up_hold" {
+        return Some(RemoteActionType::BrightnessUpHold);
+    }
+    if action == "down_hold" {
+        return Some(RemoteActionType::BrightnessDownHold);
+    }
+
+    // --- Night mode / Day mode ---
+    // IKEA STYRBAR/TRADFRI: arrow_right_click = night, arrow_left_click = day
     if action == "arrow_right_click" {
         return Some(RemoteActionType::NightMode);
     }
-
-    // Arrow left click = day mode (STYRBAR, TRADFRI)
-    // Hold/release ignored
     if action == "arrow_left_click" {
         return Some(RemoteActionType::DayMode);
+    }
+
+    // Hue dimmer on_hold = night mode, off_hold = day mode
+    // (long-press on/off as secondary function)
+    if action == "on_hold" {
+        return Some(RemoteActionType::NightMode);
+    }
+    if action == "off_hold" {
+        return Some(RemoteActionType::DayMode);
+    }
+
+    // Aqara mini: hold = night mode toggle (single button, use hold for night mode)
+    if action == "hold" || action == "long" {
+        return Some(RemoteActionType::NightMode);
     }
 
     None
@@ -831,108 +882,252 @@ fn classify_remote_action(action: &str) -> Option<RemoteActionType> {
 mod tests {
     use super::*;
 
+    // --- IKEA STYRBAR (E2001/E2002/E2313) ---
     #[test]
-    fn test_classify_toggle() {
-        assert!(matches!(
-            classify_remote_action("toggle"),
-            Some(RemoteActionType::Toggle)
-        ));
-    }
-
-    #[test]
-    fn test_classify_on_off() {
-        assert!(matches!(
-            classify_remote_action("on"),
-            Some(RemoteActionType::On)
-        ));
-        assert!(matches!(
-            classify_remote_action("off"),
-            Some(RemoteActionType::Off)
-        ));
-        assert!(matches!(
-            classify_remote_action("power_on"),
-            Some(RemoteActionType::On)
-        ));
-    }
-
-    #[test]
-    fn test_classify_brightness_click() {
-        // TRADFRI remote: brightness_up_click / brightness_down_click = single step
-        assert!(matches!(
-            classify_remote_action("brightness_up_click"),
-            Some(RemoteActionType::BrightnessUpStep)
-        ));
-        assert!(matches!(
-            classify_remote_action("brightness_down_click"),
-            Some(RemoteActionType::BrightnessDownStep)
-        ));
-    }
-
-    #[test]
-    fn test_classify_brightness_hold() {
-        // STYRBAR/RODRET: brightness_move_up/down = continuous hold
-        assert!(matches!(
+    fn test_styrbar() {
+        assert_eq!(classify_remote_action("on"), Some(RemoteActionType::On));
+        assert_eq!(classify_remote_action("off"), Some(RemoteActionType::Off));
+        assert_eq!(
             classify_remote_action("brightness_move_up"),
             Some(RemoteActionType::BrightnessUpHold)
-        ));
-        assert!(matches!(
+        );
+        assert_eq!(
             classify_remote_action("brightness_move_down"),
             Some(RemoteActionType::BrightnessDownHold)
-        ));
-        // TRADFRI remote: brightness_up_hold / brightness_down_hold = continuous hold
-        assert!(matches!(
-            classify_remote_action("brightness_up_hold"),
-            Some(RemoteActionType::BrightnessUpHold)
-        ));
-        assert!(matches!(
-            classify_remote_action("brightness_down_hold"),
-            Some(RemoteActionType::BrightnessDownHold)
-        ));
-    }
-
-    #[test]
-    fn test_classify_brightness_stop() {
-        assert!(matches!(
+        );
+        assert_eq!(
             classify_remote_action("brightness_stop"),
             Some(RemoteActionType::BrightnessStop)
-        ));
-        assert!(matches!(
-            classify_remote_action("brightness_up_release"),
-            Some(RemoteActionType::BrightnessStop)
-        ));
-        assert!(matches!(
-            classify_remote_action("brightness_down_release"),
-            Some(RemoteActionType::BrightnessStop)
-        ));
-    }
-
-    #[test]
-    fn test_classify_arrows() {
-        // Click triggers night/day mode
-        assert!(matches!(
+        );
+        assert_eq!(
             classify_remote_action("arrow_right_click"),
             Some(RemoteActionType::NightMode)
-        ));
-        assert!(matches!(
+        );
+        assert_eq!(
             classify_remote_action("arrow_left_click"),
             Some(RemoteActionType::DayMode)
-        ));
-        // Hold and release are ignored
-        assert!(classify_remote_action("arrow_right_hold").is_none());
-        assert!(classify_remote_action("arrow_left_hold").is_none());
-        assert!(classify_remote_action("arrow_right_release").is_none());
-        assert!(classify_remote_action("arrow_left_release").is_none());
+        );
+        assert_eq!(classify_remote_action("arrow_right_hold"), None);
+        assert_eq!(classify_remote_action("arrow_left_hold"), None);
+        assert_eq!(classify_remote_action("arrow_right_release"), None);
+        assert_eq!(classify_remote_action("arrow_left_release"), None);
     }
 
+    // --- IKEA TRADFRI remote (E1524/E1810) ---
     #[test]
-    fn test_classify_toggle_hold_ignored() {
-        // TRADFRI remote center button hold — no useful mapping
-        assert!(classify_remote_action("toggle_hold").is_none());
+    fn test_tradfri_remote() {
+        assert_eq!(
+            classify_remote_action("toggle"),
+            Some(RemoteActionType::Toggle)
+        );
+        assert_eq!(classify_remote_action("toggle_hold"), None);
+        assert_eq!(
+            classify_remote_action("brightness_up_click"),
+            Some(RemoteActionType::BrightnessUpStep)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_down_click"),
+            Some(RemoteActionType::BrightnessDownStep)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_up_hold"),
+            Some(RemoteActionType::BrightnessUpHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_down_hold"),
+            Some(RemoteActionType::BrightnessDownHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_up_release"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_down_release"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+        assert_eq!(
+            classify_remote_action("arrow_right_click"),
+            Some(RemoteActionType::NightMode)
+        );
+        assert_eq!(
+            classify_remote_action("arrow_left_click"),
+            Some(RemoteActionType::DayMode)
+        );
+    }
+
+    // --- IKEA RODRET dimmer (E2201) ---
+    #[test]
+    fn test_rodret() {
+        assert_eq!(classify_remote_action("on"), Some(RemoteActionType::On));
+        assert_eq!(classify_remote_action("off"), Some(RemoteActionType::Off));
+        assert_eq!(
+            classify_remote_action("brightness_move_up"),
+            Some(RemoteActionType::BrightnessUpHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_move_down"),
+            Some(RemoteActionType::BrightnessDownHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_stop"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+    }
+
+    // --- IKEA ON/OFF switch (E1743) ---
+    #[test]
+    fn test_ikea_onoff_switch() {
+        assert_eq!(classify_remote_action("on"), Some(RemoteActionType::On));
+        assert_eq!(classify_remote_action("off"), Some(RemoteActionType::Off));
+        assert_eq!(
+            classify_remote_action("brightness_move_up"),
+            Some(RemoteActionType::BrightnessUpHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_move_down"),
+            Some(RemoteActionType::BrightnessDownHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_stop"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+    }
+
+    // --- Philips Hue dimmer switch v1/v2 ---
+    #[test]
+    fn test_hue_dimmer() {
+        assert_eq!(
+            classify_remote_action("on_press"),
+            Some(RemoteActionType::On)
+        );
+        assert_eq!(
+            classify_remote_action("off_press"),
+            Some(RemoteActionType::Off)
+        );
+        assert_eq!(
+            classify_remote_action("up_press"),
+            Some(RemoteActionType::BrightnessUpStep)
+        );
+        assert_eq!(
+            classify_remote_action("down_press"),
+            Some(RemoteActionType::BrightnessDownStep)
+        );
+        assert_eq!(
+            classify_remote_action("up_hold"),
+            Some(RemoteActionType::BrightnessUpHold)
+        );
+        assert_eq!(
+            classify_remote_action("down_hold"),
+            Some(RemoteActionType::BrightnessDownHold)
+        );
+        assert_eq!(
+            classify_remote_action("up_press_release"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+        assert_eq!(
+            classify_remote_action("up_hold_release"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+        assert_eq!(
+            classify_remote_action("down_press_release"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+        assert_eq!(
+            classify_remote_action("down_hold_release"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+        // Long-press on/off = night/day mode
+        assert_eq!(
+            classify_remote_action("on_hold"),
+            Some(RemoteActionType::NightMode)
+        );
+        assert_eq!(
+            classify_remote_action("off_hold"),
+            Some(RemoteActionType::DayMode)
+        );
+        // Release events for on/off are no-ops
+        assert_eq!(classify_remote_action("on_press_release"), None);
+        assert_eq!(classify_remote_action("on_hold_release"), None);
+        assert_eq!(classify_remote_action("off_press_release"), None);
+        assert_eq!(classify_remote_action("off_hold_release"), None);
+    }
+
+    // --- Aqara mini switch (WXKG11LM) ---
+    #[test]
+    fn test_aqara_mini() {
+        assert_eq!(
+            classify_remote_action("single"),
+            Some(RemoteActionType::Toggle)
+        );
+        assert_eq!(
+            classify_remote_action("hold"),
+            Some(RemoteActionType::NightMode)
+        );
+        assert_eq!(classify_remote_action("release"), None);
+        assert_eq!(classify_remote_action("double"), None);
+    }
+
+    // --- Sonoff SNZB-01 ---
+    #[test]
+    fn test_sonoff_button() {
+        assert_eq!(
+            classify_remote_action("single"),
+            Some(RemoteActionType::Toggle)
+        );
+        assert_eq!(
+            classify_remote_action("long"),
+            Some(RemoteActionType::NightMode)
+        );
+        assert_eq!(classify_remote_action("double"), None);
+    }
+
+    // --- Tuya knobs (TS004F) ---
+    #[test]
+    fn test_tuya_knob() {
+        assert_eq!(
+            classify_remote_action("toggle"),
+            Some(RemoteActionType::Toggle)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_step_up"),
+            Some(RemoteActionType::BrightnessUpStep)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_step_down"),
+            Some(RemoteActionType::BrightnessDownStep)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_move_up"),
+            Some(RemoteActionType::BrightnessUpHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_move_down"),
+            Some(RemoteActionType::BrightnessDownHold)
+        );
+        assert_eq!(
+            classify_remote_action("brightness_stop"),
+            Some(RemoteActionType::BrightnessStop)
+        );
+    }
+
+    // --- Multi-button devices should not match (user automations) ---
+    #[test]
+    fn test_multi_button_ignored() {
+        // SOMRIG
+        assert_eq!(classify_remote_action("1_short_release"), None);
+        assert_eq!(classify_remote_action("2_long_press"), None);
+        // Aqara Opple
+        assert_eq!(classify_remote_action("button_1_single"), None);
+        assert_eq!(classify_remote_action("button_3_hold"), None);
+        // Tuya multi-button
+        assert_eq!(classify_remote_action("1_single"), None);
+        assert_eq!(classify_remote_action("2_double"), None);
     }
 
     #[test]
     fn test_classify_unknown() {
-        assert!(classify_remote_action("color_temperature_move").is_none());
-        assert!(classify_remote_action("recall_scene_1").is_none());
+        assert_eq!(classify_remote_action("color_temperature_move"), None);
+        assert_eq!(classify_remote_action("recall_scene_1"), None);
+        assert_eq!(classify_remote_action("recall_0"), None);
     }
 }
