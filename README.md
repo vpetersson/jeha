@@ -8,6 +8,8 @@ Opinionated, batteries-included light automation daemon for [Zigbee2MQTT](https:
 
 jeha does one thing well: **lighting**. Circadian rhythms, motion-activated lights, night mode, scenes - all with sensible defaults that work out of the box. Point it at your Z2M instance and your lights just work. For everything else (climate, media, blinds, complex automations), use [Home Assistant](https://www.home-assistant.io/) or similar.
 
+Single static binary. No runtime dependencies. The Docker image is under 10MB.
+
 ## Why
 
 The best home automation interface is no interface. Lights should just work: right color temperature, right brightness, right time of day, without anyone touching an app. See [this post](https://vpetersson.com/2025/06/07/home-assistant-revamp/) for the full rationale.
