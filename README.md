@@ -20,7 +20,7 @@ Home Assistant is great at being a general-purpose platform, but that generality
 ## Principles
 
 - **IEEE addresses as identity.** Device names change. IEEE addresses don't. Config references hardware addresses; friendly names resolve at runtime from Z2M.
-- **Z2M groups first.** One MQTT message per group instead of per-bulb. Less Zigbee traffic.
+- **Z2M as source of truth.** Groups, devices, and capabilities are pulled directly from Z2M at startup. One MQTT message per group instead of per-bulb. Less Zigbee traffic, no config duplication.
 - **No database.** All state derives from config + Z2M retained messages + current time. Restart at any point and converge in seconds.
 - **Never update lights that are off.** Circadian only pushes to rooms with lights ON.
 - **External change detection.** If someone activates a Z2M scene or uses a remote, jeha detects the state change and pauses circadian automatically.
