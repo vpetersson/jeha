@@ -362,14 +362,20 @@ impl CircadianEngine {
                 }
             }
 
-            // Skip rooms in night mode
+            // Only push to devices in rooms where lights are on
             {
                 let current_state = self.state.load();
                 if let Some(rs) = current_state.rooms.get(room_id) {
+                    if !rs.lights_on {
+                        debug!("Skipping device push for '{}': lights are off", room_id);
+                        continue;
+                    }
                     if rs.night_mode_active {
                         debug!("Skipping device push for '{}': night mode active", room_id);
                         continue;
                     }
+                } else {
+                    continue;
                 }
             }
 
