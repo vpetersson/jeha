@@ -42,7 +42,12 @@ async fn main() -> Result<()> {
             let schema = schemars::schema_for!(config::types::AppConfig);
             println!("{}", serde_json::to_string_pretty(&schema)?);
         }
-        Commands::Init { mqtt_host, mqtt_port, base_topic, output } => {
+        Commands::Init {
+            mqtt_host,
+            mqtt_port,
+            base_topic,
+            output,
+        } => {
             jeha::cli::init::run_init(&mqtt_host, mqtt_port, &output, &base_topic).await?;
         }
     }

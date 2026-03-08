@@ -6,7 +6,7 @@ pub mod config_sync;
 pub mod event;
 pub mod lights_out;
 pub mod mcp;
-pub mod night_mode;
 pub mod mqtt;
+pub mod night_mode;
 pub mod schedule;
 pub mod state;

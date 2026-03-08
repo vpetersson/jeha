@@ -17,10 +17,7 @@ pub enum ConditionConfig {
     },
 }
 
-pub fn evaluate_condition(
-    condition: &ConditionConfig,
-    state: &SharedState,
-) -> bool {
+pub fn evaluate_condition(condition: &ConditionConfig, state: &SharedState) -> bool {
     match condition {
         ConditionConfig::NightMode { room, active } => {
             let current = state.load();

@@ -12,10 +12,10 @@ use crate::config;
 use crate::config_sync::ConfigSync;
 use crate::event::EventBus;
 use crate::lights_out::LightsOutTask;
-use crate::night_mode::NightModeScheduler;
 use crate::mcp;
 use crate::mqtt::MqttHandle;
 use crate::mqtt::publish::Publisher;
+use crate::night_mode::NightModeScheduler;
 use crate::state;
 
 pub async fn run_daemon(

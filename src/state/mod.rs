@@ -242,10 +242,8 @@ impl StateManager {
                         }
                         RoomStateUpdate::ExternalChange { ttl_secs } => {
                             room.update_source = UpdateSource::Manual;
-                            room.manual_override_until = Some(
-                                Instant::now()
-                                    + std::time::Duration::from_secs(ttl_secs),
-                            );
+                            room.manual_override_until =
+                                Some(Instant::now() + std::time::Duration::from_secs(ttl_secs));
                         }
                     }
                 }

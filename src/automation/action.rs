@@ -153,10 +153,7 @@ pub async fn execute_action(
                 })
                 .await;
 
-            debug!(
-                "Set brightness {} in room '{}'",
-                brightness, room_id
-            );
+            debug!("Set brightness {} in room '{}'", brightness, room_id);
         }
 
         ActionConfig::SetColorTemp {

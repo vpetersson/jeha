@@ -150,9 +150,11 @@ impl AutomationEngine {
                 }
 
                 // Conditions gate
-                if !config.conditions.iter().all(|c| {
-                    condition::evaluate_condition(c, &self.state)
-                }) {
+                if !config
+                    .conditions
+                    .iter()
+                    .all(|c| condition::evaluate_condition(c, &self.state))
+                {
                     debug!(
                         "Automation '{}' conditions not met for room '{}'",
                         auto_id, room_id
@@ -246,13 +248,12 @@ impl AutomationEngine {
                     let current = self.state.load();
                     let room_state = current.rooms.get(&room_id);
                     let lights_on = room_state.map(|rs| rs.lights_on).unwrap_or(false);
-                    let is_night_mode =
-                        room_state.map(|rs| rs.night_mode_active).unwrap_or(false);
+                    let is_night_mode = room_state.map(|rs| rs.night_mode_active).unwrap_or(false);
 
                     if !lights_on {
                         let action = if is_night_mode {
-                            let enm = room_config
-                                .effective_night_mode(&self.config.night_mode.defaults);
+                            let enm =
+                                room_config.effective_night_mode(&self.config.night_mode.defaults);
                             info!(
                                 "Built-in motion: turning on lights in '{}' (night mode)",
                                 room_id
@@ -337,18 +338,19 @@ impl AutomationEngine {
                         .map(|rs| rs.night_mode_active)
                         .unwrap_or(false);
                     if is_night_mode {
-                        let enm = room_config
-                            .effective_night_mode(&self.config.night_mode.defaults);
+                        let enm =
+                            room_config.effective_night_mode(&self.config.night_mode.defaults);
                         timeout_secs = enm.motion_timeout_secs;
                     }
 
                     // Cancel existing off-timer
-                    let had_existing = if let Some(handle) = self.motion_off_handles.remove(&room_id) {
-                        handle.abort();
-                        true
-                    } else {
-                        false
-                    };
+                    let had_existing =
+                        if let Some(handle) = self.motion_off_handles.remove(&room_id) {
+                            handle.abort();
+                            true
+                        } else {
+                            false
+                        };
 
                     if had_existing {
                         debug!(
@@ -376,7 +378,12 @@ impl AutomationEngine {
                             transition: Some(3),
                         };
                         if let Err(e) = action::execute_action(
-                            &off_action, &rid, &rc, &publisher, &state_tx, &circadian,
+                            &off_action,
+                            &rid,
+                            &rc,
+                            &publisher,
+                            &state_tx,
+                            &circadian,
                         )
                         .await
                         {
@@ -430,10 +437,7 @@ impl AutomationEngine {
         let remote_action = classify_remote_action(&action_lower);
 
         let Some(remote_action) = remote_action else {
-            debug!(
-                "Unhandled remote action '{}' from {}",
-                action, remote_ieee
-            );
+            debug!("Unhandled remote action '{}' from {}", action, remote_ieee);
             return;
         };
 

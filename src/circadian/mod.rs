@@ -271,12 +271,7 @@ impl CircadianEngine {
             if let Some(ref group) = room_config.z2m_group {
                 published_ct = self.clamp_color_temp_for_group(group, target.color_temp_mired);
                 self.publisher
-                    .push_circadian_group(
-                        group,
-                        target.brightness,
-                        published_ct,
-                        transition,
-                    )
+                    .push_circadian_group(group, target.brightness, published_ct, transition)
                     .await?;
             } else {
                 published_ct = target.color_temp_mired;
@@ -291,12 +286,7 @@ impl CircadianEngine {
                         None
                     };
                     self.publisher
-                        .turn_on_ieee(
-                            ieee,
-                            Some(target.brightness),
-                            ct,
-                            Some(transition),
-                        )
+                        .turn_on_ieee(ieee, Some(target.brightness), ct, Some(transition))
                         .await?;
                 }
             }
@@ -386,12 +376,7 @@ impl CircadianEngine {
             };
 
             self.publisher
-                .turn_on_ieee(
-                    ieee,
-                    Some(target.brightness),
-                    ct,
-                    Some(3),
-                )
+                .turn_on_ieee(ieee, Some(target.brightness), ct, Some(3))
                 .await?;
 
             let _ = self
