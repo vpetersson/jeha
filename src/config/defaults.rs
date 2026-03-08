@@ -31,7 +31,7 @@ impl Default for CircadianDefaults {
             wake_time: "06:00".to_string(),
             sleep_time: "23:00".to_string(),
             start_temp_k: 2700,
-            peak_temp_k: 4500,
+            peak_temp_k: 2700,
             end_temp_k: 2200,
             start_brightness: 180,
             peak_brightness: 254,
