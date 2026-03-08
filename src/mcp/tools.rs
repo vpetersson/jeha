@@ -292,6 +292,9 @@ impl McpToolHandler {
                 let has_motion = room_config
                     .map(|r| r.motion_sensor.is_some())
                     .unwrap_or(false);
+                let motion_timeout_secs = room_config.and_then(|r| {
+                    r.effective_motion_timeout(self.config.general.motion_timeout_secs)
+                });
                 let circadian_enabled = room_config.map(|r| r.circadian_enabled).unwrap_or(true);
                 let circadian_status = if circadian_enabled {
                     self.describe_circadian_status(rs)
@@ -308,6 +311,7 @@ impl McpToolHandler {
                     "color_temp_mired": rs.current_color_temp_mired,
                     "occupancy": rs.occupancy,
                     "has_motion_sensor": has_motion,
+                    "motion_timeout_secs": motion_timeout_secs,
                     "night_mode": rs.night_mode_active,
                     "circadian_enabled": circadian_enabled,
                     "circadian": circadian_status,

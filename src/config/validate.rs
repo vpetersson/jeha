@@ -1,4 +1,5 @@
 use anyhow::{Result, bail};
+use tracing::warn;
 
 use super::types::AppConfig;
 
@@ -24,6 +25,13 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
 
         if let Some(ref sensor) = room.motion_sensor {
             validate_ieee(sensor, &format!("rooms.{}.motion_sensor", room_id))?;
+        }
+
+        if room.motion_timeout_secs.is_some() && room.motion_sensor.is_none() {
+            warn!(
+                "Room '{}' has motion_timeout_secs but no motion_sensor — timeout will have no effect",
+                room_id
+            );
         }
 
         if let Some(ref circ) = room.circadian {

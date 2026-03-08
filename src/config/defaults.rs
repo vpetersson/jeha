@@ -14,6 +14,7 @@ impl Default for GeneralConfig {
     fn default() -> Self {
         Self {
             timezone: "UTC".to_string(),
+            motion_timeout_secs: 300,
         }
     }
 }

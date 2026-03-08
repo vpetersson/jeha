@@ -219,7 +219,8 @@ fn generate_config(
         out.push_str(&format!("\n[mqtt]\nbase_topic = \"{}\"\n", base_topic));
     }
 
-    // Generate a room for each group that contains lights
+    // Generate a room for each group that contains lights (deduplicate by room_id)
+    let mut seen_rooms = std::collections::HashSet::new();
     for group in groups {
         let light_members: Vec<&DeviceInfo> = group
             .members
@@ -240,6 +241,10 @@ fn generate_config(
             .filter(|c| c.is_alphanumeric() || *c == '_')
             .collect::<String>();
 
+        if !seen_rooms.insert(room_id.clone()) {
+            continue;
+        }
+
         out.push_str(&format!("\n[rooms.{}]\n", room_id));
         out.push_str(&format!("display_name = \"{}\"\n", group.friendly_name));
         out.push_str(&format!("z2m_group = \"{}\"\n", group.friendly_name));
@@ -249,6 +254,7 @@ fn generate_config(
         let motion_sensor = find_motion_sensor_for_group(group, device_map);
         if let Some(ieee) = motion_sensor {
             out.push_str(&format!("motion_sensor = \"{}\"\n", ieee));
+            out.push_str("motion_timeout_secs = 300\n");
         }
     }
 

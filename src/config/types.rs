@@ -48,6 +48,13 @@ fn default_base_topic() -> String {
 pub struct GeneralConfig {
     #[serde(default = "default_timezone")]
     pub timezone: String,
+    /// Default motion timeout for all rooms with motion sensors (seconds).
+    #[serde(default = "default_motion_timeout_secs")]
+    pub motion_timeout_secs: u64,
+}
+
+fn default_motion_timeout_secs() -> u64 {
+    300
 }
 
 fn default_timezone() -> String {
@@ -125,6 +132,9 @@ pub struct RoomConfig {
     #[serde(default)]
     pub lights: Vec<String>,
     pub motion_sensor: Option<String>,
+    /// Per-room motion timeout override (seconds). When set alongside motion_sensor,
+    /// jeha automatically turns lights on/off based on motion without needing automations.
+    pub motion_timeout_secs: Option<u64>,
     /// Set to false to disable circadian for this room entirely.
     #[serde(default = "default_true")]
     pub circadian_enabled: bool,
@@ -133,6 +143,17 @@ pub struct RoomConfig {
     pub lights_out: bool,
     pub circadian: Option<CircadianOverride>,
     pub night_mode: Option<NightModeOverride>,
+}
+
+impl RoomConfig {
+    /// Returns the effective motion timeout for this room, or None if
+    /// the room has no motion sensor.
+    pub fn effective_motion_timeout(&self, global_default: u64) -> Option<u64> {
+        if self.motion_sensor.is_none() {
+            return None;
+        }
+        Some(self.motion_timeout_secs.unwrap_or(global_default))
+    }
 }
 
 fn default_true() -> bool {
