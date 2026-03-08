@@ -39,6 +39,8 @@ pub struct AutomationEngine {
     automations: HashMap<String, AutomationInfo>,
     /// Per-room handles for pending motion-off timers. Aborted on new motion events.
     motion_off_handles: HashMap<String, tokio::task::JoinHandle<()>>,
+    /// Per-room handles for continuous dimming (hold-to-dim). Aborted on brightness stop/release.
+    dimming_handles: HashMap<String, CancellationToken>,
 }
 
 impl AutomationEngine {
@@ -61,6 +63,7 @@ impl AutomationEngine {
             circadian_engine,
             automations: HashMap::new(),
             motion_off_handles: HashMap::new(),
+            dimming_handles: HashMap::new(),
         }
     }
 
@@ -534,40 +537,20 @@ impl AutomationEngine {
                     }
                 }
 
-                RemoteActionType::BrightnessUp => {
-                    let step = self.config.general.remote_brightness_step;
-                    let current = self.state.load();
-                    let current_brightness = current
-                        .rooms
-                        .get(room_id)
-                        .and_then(|rs| rs.current_brightness)
-                        .unwrap_or(128);
-                    let new_brightness = current_brightness.saturating_add(step).min(254);
-
-                    debug!(
-                        "Remote: brightness up in '{}': {} -> {}",
-                        room_id, current_brightness, new_brightness
-                    );
-                    self.set_manual_brightness(room_id, room_config, new_brightness)
-                        .await;
+                RemoteActionType::BrightnessUpStep => {
+                    self.step_brightness(room_id, room_config, true).await;
                 }
 
-                RemoteActionType::BrightnessDown => {
-                    let step = self.config.general.remote_brightness_step;
-                    let current = self.state.load();
-                    let current_brightness = current
-                        .rooms
-                        .get(room_id)
-                        .and_then(|rs| rs.current_brightness)
-                        .unwrap_or(128);
-                    let new_brightness = current_brightness.saturating_sub(step).max(1);
+                RemoteActionType::BrightnessDownStep => {
+                    self.step_brightness(room_id, room_config, false).await;
+                }
 
-                    debug!(
-                        "Remote: brightness down in '{}': {} -> {}",
-                        room_id, current_brightness, new_brightness
-                    );
-                    self.set_manual_brightness(room_id, room_config, new_brightness)
-                        .await;
+                RemoteActionType::BrightnessUpHold => {
+                    self.start_continuous_dimming(room_id.clone(), room_config.clone(), true);
+                }
+
+                RemoteActionType::BrightnessDownHold => {
+                    self.start_continuous_dimming(room_id.clone(), room_config.clone(), false);
                 }
 
                 RemoteActionType::NightMode => {
@@ -611,11 +594,123 @@ impl AutomationEngine {
                 }
 
                 RemoteActionType::BrightnessStop => {
-                    // No-op: just acknowledges end of continuous dim
-                    debug!("Remote: brightness stop in '{}'", room_id);
+                    if let Some(token) = self.dimming_handles.remove(room_id) {
+                        token.cancel();
+                        debug!("Remote: stopped continuous dimming in '{}'", room_id);
+                    }
                 }
             }
         }
+    }
+
+    /// Single-step brightness change (click).
+    async fn step_brightness(
+        &self,
+        room_id: &str,
+        room_config: &crate::config::types::RoomConfig,
+        up: bool,
+    ) {
+        let step = self.config.general.remote_brightness_step;
+        let current = self.state.load();
+        let current_brightness = current
+            .rooms
+            .get(room_id)
+            .and_then(|rs| rs.current_brightness)
+            .unwrap_or(128);
+        let new_brightness = if up {
+            current_brightness.saturating_add(step).min(254)
+        } else {
+            current_brightness.saturating_sub(step).max(1)
+        };
+
+        debug!(
+            "Remote: brightness {} in '{}': {} -> {}",
+            if up { "up" } else { "down" },
+            room_id,
+            current_brightness,
+            new_brightness
+        );
+        self.set_manual_brightness(room_id, room_config, new_brightness)
+            .await;
+    }
+
+    /// Start continuous dimming (hold). Repeats brightness steps every 300ms until cancelled.
+    fn start_continuous_dimming(
+        &mut self,
+        room_id: String,
+        room_config: crate::config::types::RoomConfig,
+        up: bool,
+    ) {
+        // Cancel any existing dimming for this room
+        if let Some(token) = self.dimming_handles.remove(&room_id) {
+            token.cancel();
+        }
+
+        let token = CancellationToken::new();
+        self.dimming_handles.insert(room_id.clone(), token.clone());
+
+        let state = self.state.clone();
+        let state_tx = self.state_tx.clone();
+        let publisher = self.publisher.clone();
+        let circadian_engine = self.circadian_engine.clone();
+        let step = self.config.general.remote_brightness_step;
+
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(300));
+            // First tick is immediate — pause circadian once up front
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.clone(),
+                    update: RoomStateUpdate::CircadianPause {
+                        paused: true,
+                        until: None,
+                    },
+                })
+                .await;
+
+            loop {
+                tokio::select! {
+                    _ = token.cancelled() => break,
+                    _ = interval.tick() => {
+                        let current_brightness = state
+                            .load()
+                            .rooms
+                            .get(&room_id)
+                            .and_then(|rs| rs.current_brightness)
+                            .unwrap_or(128);
+                        let new_brightness = if up {
+                            current_brightness.saturating_add(step).min(254)
+                        } else {
+                            current_brightness.saturating_sub(step).max(1)
+                        };
+
+                        if new_brightness == current_brightness {
+                            break; // Hit min/max
+                        }
+
+                        let action = ActionConfig::LightsOn {
+                            use_circadian: false,
+                            brightness: Some(new_brightness),
+                            color_temp_k: None,
+                            transition: Some(0),
+                        };
+                        if let Err(e) = action::execute_action(
+                            &action,
+                            &room_id,
+                            &room_config,
+                            &publisher,
+                            &state_tx,
+                            &circadian_engine,
+                        )
+                        .await
+                        {
+                            error!("Remote: continuous dim failed in '{}': {}", room_id, e);
+                            break;
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /// Set brightness manually, pausing circadian.
@@ -658,27 +753,34 @@ impl AutomationEngine {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum RemoteActionType {
     Toggle,
     On,
     Off,
-    BrightnessUp,
-    BrightnessDown,
+    /// Single-step brightness increase (click).
+    BrightnessUpStep,
+    /// Start continuous brightness increase (hold/move).
+    BrightnessUpHold,
+    /// Single-step brightness decrease (click).
+    BrightnessDownStep,
+    /// Start continuous brightness decrease (hold/move).
+    BrightnessDownHold,
     BrightnessStop,
     NightMode,
     DayMode,
 }
 
 /// Classify a Z2M action string into a built-in remote action.
-/// Covers IKEA, Hue, Aqara, and other common Z2M remote action names.
+/// Covers IKEA STYRBAR, TRADFRI remote, RODRET dimmer, and other common remotes.
 fn classify_remote_action(action: &str) -> Option<RemoteActionType> {
-    // Toggle
+    // Toggle (center button on TRADFRI remote)
+    // "toggle_hold" is ignored — no useful mapping
     if action == "toggle" {
         return Some(RemoteActionType::Toggle);
     }
 
-    // Explicit on/off
+    // Explicit on/off (STYRBAR, RODRET)
     if action == "on" || action == "power_on" {
         return Some(RemoteActionType::On);
     }
@@ -686,28 +788,39 @@ fn classify_remote_action(action: &str) -> Option<RemoteActionType> {
         return Some(RemoteActionType::Off);
     }
 
-    // Brightness stop/release (check before up/down so "brightness_up_release" matches stop)
+    // Brightness stop/release — must check before up/down
+    // Matches: brightness_stop, brightness_up_release, brightness_down_release
     if action.contains("brightness") && (action.contains("stop") || action.contains("release")) {
         return Some(RemoteActionType::BrightnessStop);
     }
 
-    // Brightness up (click or continuous move)
+    // Brightness up
     if action.contains("brightness") && (action.contains("up") || action.contains("increase")) {
-        return Some(RemoteActionType::BrightnessUp);
+        // "brightness_up_click" = single step (TRADFRI)
+        // "brightness_up_hold" / "brightness_move_up" = continuous (TRADFRI / STYRBAR+RODRET)
+        if action.contains("click") {
+            return Some(RemoteActionType::BrightnessUpStep);
+        }
+        return Some(RemoteActionType::BrightnessUpHold);
     }
 
     // Brightness down
     if action.contains("brightness") && (action.contains("down") || action.contains("decrease")) {
-        return Some(RemoteActionType::BrightnessDown);
+        if action.contains("click") {
+            return Some(RemoteActionType::BrightnessDownStep);
+        }
+        return Some(RemoteActionType::BrightnessDownHold);
     }
 
-    // Arrow right / right button = night mode
-    if action.contains("right") && !action.contains("release") && !action.contains("stop") {
+    // Arrow right click = night mode (STYRBAR, TRADFRI)
+    // Hold/release ignored
+    if action == "arrow_right_click" {
         return Some(RemoteActionType::NightMode);
     }
 
-    // Arrow left / left button = day mode
-    if action.contains("left") && !action.contains("release") && !action.contains("stop") {
+    // Arrow left click = day mode (STYRBAR, TRADFRI)
+    // Hold/release ignored
+    if action == "arrow_left_click" {
         return Some(RemoteActionType::DayMode);
     }
 
@@ -743,25 +856,42 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_brightness() {
-        // IKEA style
+    fn test_classify_brightness_click() {
+        // TRADFRI remote: brightness_up_click / brightness_down_click = single step
         assert!(matches!(
             classify_remote_action("brightness_up_click"),
-            Some(RemoteActionType::BrightnessUp)
+            Some(RemoteActionType::BrightnessUpStep)
         ));
         assert!(matches!(
             classify_remote_action("brightness_down_click"),
-            Some(RemoteActionType::BrightnessDown)
+            Some(RemoteActionType::BrightnessDownStep)
         ));
+    }
+
+    #[test]
+    fn test_classify_brightness_hold() {
+        // STYRBAR/RODRET: brightness_move_up/down = continuous hold
         assert!(matches!(
             classify_remote_action("brightness_move_up"),
-            Some(RemoteActionType::BrightnessUp)
+            Some(RemoteActionType::BrightnessUpHold)
         ));
         assert!(matches!(
             classify_remote_action("brightness_move_down"),
-            Some(RemoteActionType::BrightnessDown)
+            Some(RemoteActionType::BrightnessDownHold)
         ));
-        // Stop/release
+        // TRADFRI remote: brightness_up_hold / brightness_down_hold = continuous hold
+        assert!(matches!(
+            classify_remote_action("brightness_up_hold"),
+            Some(RemoteActionType::BrightnessUpHold)
+        ));
+        assert!(matches!(
+            classify_remote_action("brightness_down_hold"),
+            Some(RemoteActionType::BrightnessDownHold)
+        ));
+    }
+
+    #[test]
+    fn test_classify_brightness_stop() {
         assert!(matches!(
             classify_remote_action("brightness_stop"),
             Some(RemoteActionType::BrightnessStop)
@@ -770,10 +900,15 @@ mod tests {
             classify_remote_action("brightness_up_release"),
             Some(RemoteActionType::BrightnessStop)
         ));
+        assert!(matches!(
+            classify_remote_action("brightness_down_release"),
+            Some(RemoteActionType::BrightnessStop)
+        ));
     }
 
     #[test]
     fn test_classify_arrows() {
+        // Click triggers night/day mode
         assert!(matches!(
             classify_remote_action("arrow_right_click"),
             Some(RemoteActionType::NightMode)
@@ -782,9 +917,17 @@ mod tests {
             classify_remote_action("arrow_left_click"),
             Some(RemoteActionType::DayMode)
         ));
-        // Release should be ignored
+        // Hold and release are ignored
+        assert!(classify_remote_action("arrow_right_hold").is_none());
+        assert!(classify_remote_action("arrow_left_hold").is_none());
         assert!(classify_remote_action("arrow_right_release").is_none());
         assert!(classify_remote_action("arrow_left_release").is_none());
+    }
+
+    #[test]
+    fn test_classify_toggle_hold_ignored() {
+        // TRADFRI remote center button hold — no useful mapping
+        assert!(classify_remote_action("toggle_hold").is_none());
     }
 
     #[test]
