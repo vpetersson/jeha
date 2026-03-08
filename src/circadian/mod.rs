@@ -260,7 +260,7 @@ impl CircadianEngine {
                 .transition_secs;
 
             if !target_logged {
-                info!(
+                debug!(
                     "Circadian target: {}K ({}mired), brightness {}",
                     target.color_temp_k, target.color_temp_mired, target.brightness
                 );
