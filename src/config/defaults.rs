@@ -36,7 +36,7 @@ impl Default for CircadianDefaults {
             start_brightness: 150,
             peak_brightness: 254,
             end_brightness: 77,
-            ramp_duration_mins: 120,
+            ramp_duration_mins: 180,
             curve: CurveType::Cosine,
             transition_secs: 30,
             update_interval_secs: 60,
