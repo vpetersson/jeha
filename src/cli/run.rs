@@ -12,6 +12,7 @@ use crate::config;
 use crate::config_sync::ConfigSync;
 use crate::event::EventBus;
 use crate::lights_out::LightsOutTask;
+use crate::night_mode::NightModeScheduler;
 use crate::mcp;
 use crate::mqtt::MqttHandle;
 use crate::mqtt::publish::Publisher;
@@ -143,12 +144,24 @@ pub async fn run_daemon(
     );
     tokio::spawn(lights_out.run());
 
+    // 6d. Start night mode scheduler
+    let night_scheduler = NightModeScheduler::new(
+        app_config.clone(),
+        shared_state.clone(),
+        state_tx.clone(),
+        publisher.clone(),
+        event_bus.clone(),
+        cancel.child_token(),
+    );
+    tokio::spawn(night_scheduler.run());
+
     // 7. Start MCP server
     let mcp_state = shared_state.clone();
     let mcp_state_tx = state_tx.clone();
     let mcp_publisher = publisher.clone();
     let mcp_bind = app_config.mcp.bind.clone();
     let mcp_config = app_config.clone();
+    let mcp_event_bus = event_bus.clone();
     tokio::spawn(async move {
         if let Err(e) = mcp::start_mcp_server(
             &mcp_bind,
@@ -156,6 +169,7 @@ pub async fn run_daemon(
             mcp_state_tx,
             mcp_publisher,
             mcp_config,
+            mcp_event_bus,
         )
         .await
         {

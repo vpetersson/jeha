@@ -41,8 +41,8 @@ impl Default for CircadianDefaults {
 impl Default for NightModeDefaults {
     fn default() -> Self {
         Self {
-            color_temp_k: 2200,
-            brightness: 20,
+            color_temp_k: 2000,
+            brightness: 1,
             motion_timeout_secs: 120,
         }
     }
@@ -87,22 +87,31 @@ impl RoomConfig {
         }
     }
 
-    pub fn effective_night_mode(&self, defaults: &NightModeDefaults) -> Option<EffectiveNightMode> {
-        self.night_mode.as_ref().map(|nm| EffectiveNightMode {
-            start_time: nm.start_time.clone().unwrap_or_else(|| "23:00".to_string()),
-            end_time: nm.end_time.clone().unwrap_or_else(|| "06:00".to_string()),
-            color_temp_k: nm.color_temp_k.unwrap_or(defaults.color_temp_k),
-            brightness: nm.brightness.unwrap_or(defaults.brightness),
-            motion_timeout_secs: nm
-                .motion_timeout_secs
-                .unwrap_or(defaults.motion_timeout_secs),
-        })
+    pub fn effective_night_mode(&self, defaults: &NightModeDefaults) -> EffectiveNightMode {
+        match &self.night_mode {
+            Some(nm) => EffectiveNightMode {
+                start_time: nm.start_time.clone(),
+                end_time: nm.end_time.clone(),
+                color_temp_k: nm.color_temp_k.unwrap_or(defaults.color_temp_k),
+                brightness: nm.brightness.unwrap_or(defaults.brightness),
+                motion_timeout_secs: nm
+                    .motion_timeout_secs
+                    .unwrap_or(defaults.motion_timeout_secs),
+            },
+            None => EffectiveNightMode {
+                start_time: None,
+                end_time: None,
+                color_temp_k: defaults.color_temp_k,
+                brightness: defaults.brightness,
+                motion_timeout_secs: defaults.motion_timeout_secs,
+            },
+        }
     }
 }
 
 pub struct EffectiveNightMode {
-    pub start_time: String,
-    pub end_time: String,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
     pub color_temp_k: u16,
     pub brightness: u8,
     pub motion_timeout_secs: u64,

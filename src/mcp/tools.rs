@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::config::types::AppConfig;
+use crate::event::EventBus;
 use crate::mqtt::publish::Publisher;
 use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
 
@@ -14,6 +15,7 @@ pub struct McpToolHandler {
     state_tx: mpsc::Sender<StateCommand>,
     publisher: Arc<Publisher>,
     config: Arc<AppConfig>,
+    event_bus: EventBus,
 }
 
 impl McpToolHandler {
@@ -22,12 +24,14 @@ impl McpToolHandler {
         state_tx: mpsc::Sender<StateCommand>,
         publisher: Arc<Publisher>,
         config: Arc<AppConfig>,
+        event_bus: EventBus,
     ) -> Self {
         Self {
             state,
             state_tx,
             publisher,
             config,
+            event_bus,
         }
     }
 
@@ -220,8 +224,8 @@ impl McpToolHandler {
             "set_night_mode" => {
                 let room_id = args["room_id"].as_str().ok_or("room_id is required")?;
                 let active = args["active"].as_bool().ok_or("active is required")?;
-                self.set_night_mode(room_id, active).await;
-                Ok(json!({"status": "ok", "room": room_id, "night_mode": active}))
+                self.set_night_mode(room_id, active)
+                    .await
             }
             "set_scene" => {
                 let room_id = args["room_id"].as_str().ok_or("room_id is required")?;
@@ -867,14 +871,43 @@ impl McpToolHandler {
 
     // --- Night mode ---
 
-    async fn set_night_mode(&self, room_id: &str, active: bool) {
-        let _ = self
-            .state_tx
-            .send(StateCommand::UpdateRoomState {
-                room_id: room_id.to_string(),
-                update: RoomStateUpdate::NightMode(active),
-            })
-            .await;
+    async fn set_night_mode(&self, room_id: &str, active: bool) -> Result<Value, String> {
+        self.validate_room(room_id)?;
+        let room_config = self.config.rooms.get(room_id).unwrap();
+        let display_name = self.display_name(room_id);
+
+        if active {
+            crate::night_mode::activate_night_mode(
+                room_id,
+                room_config,
+                &self.config,
+                &self.publisher,
+                &self.state,
+                &self.state_tx,
+                &self.event_bus,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+
+            let enm = room_config.effective_night_mode(&self.config.night_mode.defaults);
+            Ok(json!({
+                "status": "ok",
+                "room": room_id,
+                "night_mode": true,
+                "description": format!("{}: night mode on (brightness {}, {}K). Circadian paused.", display_name, enm.brightness, enm.color_temp_k)
+            }))
+        } else {
+            crate::night_mode::deactivate_night_mode(room_id, &self.state_tx, &self.event_bus)
+                .await
+                .map_err(|e| e.to_string())?;
+
+            Ok(json!({
+                "status": "ok",
+                "room": room_id,
+                "night_mode": false,
+                "description": format!("{}: night mode off. Circadian resumed.", display_name)
+            }))
+        }
     }
 
     // --- Status ---

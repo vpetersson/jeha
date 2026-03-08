@@ -14,7 +14,7 @@ use crate::circadian::CircadianEngine;
 use crate::config::types::{ActionConfig, AppConfig, AutomationConfig};
 use crate::event::{Event, EventBus};
 use crate::mqtt::publish::Publisher;
-use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
+use crate::state::{RoomStateUpdate, SharedState, StateCommand};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum AutomationState {
@@ -209,22 +209,36 @@ impl AutomationEngine {
 
                     // Only turn on if lights are currently off
                     let current = self.state.load();
-                    let lights_on = current
-                        .rooms
-                        .get(&room_id)
-                        .map(|rs| rs.lights_on)
-                        .unwrap_or(false);
+                    let room_state = current.rooms.get(&room_id);
+                    let lights_on = room_state.map(|rs| rs.lights_on).unwrap_or(false);
+                    let is_night_mode =
+                        room_state.map(|rs| rs.night_mode_active).unwrap_or(false);
 
                     if !lights_on {
-                        info!(
-                            "Built-in motion: turning on lights in '{}' (circadian)",
-                            room_id
-                        );
-                        let action = ActionConfig::LightsOn {
-                            use_circadian: true,
-                            brightness: None,
-                            color_temp_k: None,
-                            transition: None,
+                        let action = if is_night_mode {
+                            let enm = room_config
+                                .effective_night_mode(&self.config.night_mode.defaults);
+                            info!(
+                                "Built-in motion: turning on lights in '{}' (night mode)",
+                                room_id
+                            );
+                            ActionConfig::LightsOn {
+                                use_circadian: false,
+                                brightness: Some(enm.brightness),
+                                color_temp_k: Some(enm.color_temp_k),
+                                transition: Some(1),
+                            }
+                        } else {
+                            info!(
+                                "Built-in motion: turning on lights in '{}' (circadian)",
+                                room_id
+                            );
+                            ActionConfig::LightsOn {
+                                use_circadian: true,
+                                brightness: None,
+                                color_temp_k: None,
+                                transition: None,
+                            }
                         };
                         if let Err(e) = action::execute_action(
                             &action,
@@ -267,7 +281,20 @@ impl AutomationEngine {
                     })
                     .collect();
 
-                for (room_id, room_config, timeout_secs) in rooms {
+                for (room_id, room_config, mut timeout_secs) in rooms {
+                    // Use night mode timeout if active
+                    let current = self.state.load();
+                    let is_night_mode = current
+                        .rooms
+                        .get(&room_id)
+                        .map(|rs| rs.night_mode_active)
+                        .unwrap_or(false);
+                    if is_night_mode {
+                        let enm = room_config
+                            .effective_night_mode(&self.config.night_mode.defaults);
+                        timeout_secs = enm.motion_timeout_secs;
+                    }
+
                     // Cancel existing off-timer
                     let had_existing = if let Some(handle) = self.motion_off_handles.remove(&room_id) {
                         handle.abort();
@@ -492,57 +519,38 @@ impl AutomationEngine {
 
                 RemoteActionType::NightMode => {
                     info!("Remote: enabling night mode in '{}'", room_id);
-                    let _ = self
-                        .state_tx
-                        .send(StateCommand::UpdateRoomState {
-                            room_id: room_id.clone(),
-                            update: RoomStateUpdate::NightMode(true),
-                        })
-                        .await;
-                    // Pause circadian so night mode sticks
-                    let _ = self
-                        .state_tx
-                        .send(StateCommand::UpdateRoomState {
-                            room_id: room_id.clone(),
-                            update: RoomStateUpdate::CircadianPause {
-                                paused: true,
-                                until: None,
-                            },
-                        })
-                        .await;
+                    if let Err(e) = crate::night_mode::activate_night_mode(
+                        room_id,
+                        room_config,
+                        &self.config,
+                        &self.publisher,
+                        &self.state,
+                        &self.state_tx,
+                        &self.event_bus,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Remote: failed to activate night mode in '{}': {}",
+                            room_id, e
+                        );
+                    }
                 }
 
                 RemoteActionType::DayMode => {
                     info!("Remote: resuming day mode in '{}'", room_id);
-                    let _ = self
-                        .state_tx
-                        .send(StateCommand::UpdateRoomState {
-                            room_id: room_id.clone(),
-                            update: RoomStateUpdate::NightMode(false),
-                        })
-                        .await;
-                    // Resume circadian
-                    let _ = self
-                        .state_tx
-                        .send(StateCommand::UpdateRoomState {
-                            room_id: room_id.clone(),
-                            update: RoomStateUpdate::CircadianPause {
-                                paused: false,
-                                until: None,
-                            },
-                        })
-                        .await;
-                    let _ = self
-                        .state_tx
-                        .send(StateCommand::UpdateRoomState {
-                            room_id: room_id.clone(),
-                            update: RoomStateUpdate::LightsOn {
-                                brightness: None,
-                                color_temp_mired: None,
-                                source: UpdateSource::Circadian,
-                            },
-                        })
-                        .await;
+                    if let Err(e) = crate::night_mode::deactivate_night_mode(
+                        room_id,
+                        &self.state_tx,
+                        &self.event_bus,
+                    )
+                    .await
+                    {
+                        error!(
+                            "Remote: failed to deactivate night mode in '{}': {}",
+                            room_id, e
+                        );
+                    }
                 }
 
                 RemoteActionType::BrightnessStop => {
