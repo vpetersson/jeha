@@ -70,10 +70,10 @@ pub async fn handle_message(
 
     match relative {
         "bridge/devices" => {
-            handle_bridge_devices(payload, state_tx, event_bus).await?;
+            handle_bridge_devices(payload, state, state_tx, event_bus).await?;
         }
         "bridge/groups" => {
-            handle_bridge_groups(payload, state_tx, event_bus).await?;
+            handle_bridge_groups(payload, state, state_tx, event_bus).await?;
         }
         "bridge/state" => {
             let text = std::str::from_utf8(payload)?;
@@ -95,6 +95,7 @@ pub async fn handle_message(
 
 async fn handle_bridge_devices(
     payload: &Bytes,
+    state: &SharedState,
     state_tx: &mpsc::Sender<StateCommand>,
     event_bus: &EventBus,
 ) -> Result<()> {
@@ -130,7 +131,11 @@ async fn handle_bridge_devices(
         device_map.insert(device.ieee_address, info);
     }
 
-    info!("Discovered {} devices from Z2M", device_map.len());
+    let prev_count = state.load().device_map.len();
+    let new_count = device_map.len();
+    if new_count != prev_count {
+        info!("Discovered {} devices from Z2M", new_count);
+    }
     let _ = state_tx.send(StateCommand::UpdateDevices(device_map)).await;
     event_bus.publish(Event::DevicesUpdated);
     Ok(())
@@ -167,6 +172,7 @@ fn parse_capabilities(exposes: &[serde_json::Value], info: &mut Z2mDeviceInfo) {
 
 async fn handle_bridge_groups(
     payload: &Bytes,
+    state: &SharedState,
     state_tx: &mpsc::Sender<StateCommand>,
     event_bus: &EventBus,
 ) -> Result<()> {
@@ -211,7 +217,11 @@ async fn handle_bridge_groups(
         );
     }
 
-    info!("Discovered {} groups from Z2M", group_map.len());
+    let prev_count = state.load().group_map.len();
+    let new_count = group_map.len();
+    if new_count != prev_count {
+        info!("Discovered {} groups from Z2M", new_count);
+    }
     let _ = state_tx.send(StateCommand::UpdateGroups(group_map)).await;
     event_bus.publish(Event::GroupsUpdated);
     Ok(())
