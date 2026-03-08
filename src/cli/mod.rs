@@ -9,6 +9,10 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(name = "jeha", about = "Light Automation OS", version)]
 pub struct Cli {
+    /// Enable debug logging
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }

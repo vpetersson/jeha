@@ -69,6 +69,17 @@ pub async fn execute_action(
                 })
                 .await;
 
+            // Mark as jeha push so Z2M echoes don't trigger external change detection
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.to_string(),
+                    update: RoomStateUpdate::JehaPush {
+                        brightness: Some(bright),
+                        color_temp_mired: ct_mired,
+                    },
+                })
+                .await;
+
             debug!("Lights ON in room '{}': brightness={}", room_id, bright);
         }
 

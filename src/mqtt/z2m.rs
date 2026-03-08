@@ -349,36 +349,42 @@ async fn handle_device_state(
             .is_none_or(|push_time| push_time.elapsed() > quiet_window);
 
         if outside_quiet_window {
-            // Check if values differ significantly from what we last set
-            let brightness_changed = match (has_brightness, room_state.current_brightness) {
+            // Compare against intended values (not current_*, which drifts from Z2M echoes)
+            let brightness_changed = match (has_brightness, room_state.intended_brightness) {
                 (Some(reported), Some(expected)) => {
-                    (reported as i64 - expected as i64).unsigned_abs() > 5
+                    (reported as i64 - expected as i64).unsigned_abs() > 15
                 }
                 _ => false,
             };
-            let color_temp_changed = match (has_color_temp, room_state.current_color_temp_mired) {
+            let color_temp_changed = match (has_color_temp, room_state.intended_color_temp_mired) {
                 (Some(reported), Some(expected)) => {
-                    (reported as i64 - expected as i64).unsigned_abs() > 10
+                    (reported as i64 - expected as i64).unsigned_abs() > 25
                 }
                 _ => false,
             };
 
             if brightness_changed || color_temp_changed {
+                let external_override_secs = 30 * 60; // 30 minutes
                 info!(
                     "External light change detected in room '{}' (via '{}'): \
-                     brightness {:?}->{:?}, color_temp {:?}->{:?}. \
-                     Pausing circadian.",
+                     brightness {:?}->{:?} (intended {:?}), color_temp {:?}->{:?} (intended {:?}). \
+                     Pausing circadian for {}m.",
                     room_id,
                     device_name,
                     room_state.current_brightness,
                     has_brightness,
+                    room_state.intended_brightness,
                     room_state.current_color_temp_mired,
                     has_color_temp,
+                    room_state.intended_color_temp_mired,
+                    external_override_secs / 60,
                 );
                 let _ = state_tx
                     .send(StateCommand::UpdateRoomState {
                         room_id: room_id.clone(),
-                        update: RoomStateUpdate::ExternalChange,
+                        update: RoomStateUpdate::ExternalChange {
+                            ttl_secs: external_override_secs,
+                        },
                     })
                     .await;
                 event_bus.publish(Event::ExternalLightChange {

@@ -68,6 +68,10 @@ pub struct RoomState {
     /// Used to distinguish jeha's own echoes from external changes.
     #[serde(skip)]
     pub last_jeha_push: Option<Instant>,
+    /// Last values jeha intentionally published (for external change comparison).
+    /// These are NOT updated by Z2M echo-backs, only by jeha's own publish actions.
+    pub intended_brightness: Option<u8>,
+    pub intended_color_temp_mired: Option<u16>,
 }
 
 impl Default for RoomState {
@@ -84,6 +88,8 @@ impl Default for RoomState {
             circadian_paused_until: None,
             manual_override_until: None,
             last_jeha_push: None,
+            intended_brightness: None,
+            intended_color_temp_mired: None,
         }
     }
 }
@@ -156,8 +162,13 @@ pub enum RoomStateUpdate {
     ManualOverrideTtl {
         until: Option<Instant>,
     },
-    JehaPush,
-    ExternalChange,
+    JehaPush {
+        brightness: Option<u8>,
+        color_temp_mired: Option<u16>,
+    },
+    ExternalChange {
+        ttl_secs: u64,
+    },
 }
 
 pub struct StateManager {
@@ -217,12 +228,24 @@ impl StateManager {
                         RoomStateUpdate::ManualOverrideTtl { until } => {
                             room.manual_override_until = until;
                         }
-                        RoomStateUpdate::JehaPush => {
+                        RoomStateUpdate::JehaPush {
+                            brightness,
+                            color_temp_mired,
+                        } => {
                             room.last_jeha_push = Some(Instant::now());
+                            if brightness.is_some() {
+                                room.intended_brightness = brightness;
+                            }
+                            if color_temp_mired.is_some() {
+                                room.intended_color_temp_mired = color_temp_mired;
+                            }
                         }
-                        RoomStateUpdate::ExternalChange => {
+                        RoomStateUpdate::ExternalChange { ttl_secs } => {
                             room.update_source = UpdateSource::Manual;
-                            room.manual_override_until = None;
+                            room.manual_override_until = Some(
+                                Instant::now()
+                                    + std::time::Duration::from_secs(ttl_secs),
+                            );
                         }
                     }
                 }

@@ -115,6 +115,65 @@ impl CircadianEngine {
         }
     }
 
+    /// Clamp a color_temp mired value to the narrowest supported range
+    /// of all devices in the given Z2M group.
+    fn clamp_color_temp_for_group(&self, group_name: &str, mired: u16) -> u16 {
+        let current = self.state.load();
+        let Some(group) = current.group_map.get(group_name) else {
+            return mired;
+        };
+
+        let mut range_min: Option<u16> = None;
+        let mut range_max: Option<u16> = None;
+
+        for member in &group.members {
+            if let Some(device) = current.device_map.get(&member.ieee_address) {
+                if device.supports_color_temp {
+                    if let Some(dev_min) = device.color_temp_min {
+                        range_min = Some(range_min.map_or(dev_min, |cur: u16| cur.max(dev_min)));
+                    }
+                    if let Some(dev_max) = device.color_temp_max {
+                        range_max = Some(range_max.map_or(dev_max, |cur: u16| cur.min(dev_max)));
+                    }
+                }
+            }
+        }
+
+        let clamped = match (range_min, range_max) {
+            (Some(min), Some(max)) if min <= max => mired.clamp(min, max),
+            (Some(min), None) => mired.max(min),
+            (None, Some(max)) => mired.min(max),
+            _ => mired,
+        };
+
+        if clamped != mired {
+            debug!(
+                "Clamped color_temp {} -> {} mired for group '{}'",
+                mired, clamped, group_name
+            );
+        }
+
+        clamped
+    }
+
+    /// Clamp a color_temp mired value to a single device's supported range.
+    fn clamp_color_temp_for_device(&self, ieee: &str, mired: u16) -> u16 {
+        let current = self.state.load();
+        let Some(device) = current.device_map.get(ieee) else {
+            return mired;
+        };
+        let min = device.color_temp_min.unwrap_or(0);
+        let max = device.color_temp_max.unwrap_or(u16::MAX);
+        let clamped = mired.clamp(min, max);
+        if clamped != mired {
+            debug!(
+                "Clamped color_temp {} -> {} mired for device '{}'",
+                mired, clamped, ieee
+            );
+        }
+        clamped
+    }
+
     pub fn compute_room_target(&self, room_id: &str) -> Option<CircadianTarget> {
         let room_config = self.config.rooms.get(room_id)?;
         if !room_config.circadian_enabled {
@@ -211,23 +270,26 @@ impl CircadianEngine {
                 target_logged = true;
             }
 
+            let published_ct;
             if let Some(ref group) = room_config.z2m_group {
+                published_ct = self.clamp_color_temp_for_group(group, target.color_temp_mired);
                 self.publisher
                     .push_circadian_group(
                         group,
                         target.brightness,
-                        target.color_temp_mired,
+                        published_ct,
                         transition,
                     )
                     .await?;
             } else {
+                published_ct = target.color_temp_mired;
                 for ieee in &room_config.lights {
                     let supports_color_temp = current_state
                         .device_map
                         .get(ieee)
                         .is_some_and(|d| d.supports_color_temp);
                     let ct = if supports_color_temp {
-                        Some(target.color_temp_mired)
+                        Some(self.clamp_color_temp_for_device(ieee, target.color_temp_mired))
                     } else {
                         None
                     };
@@ -248,7 +310,7 @@ impl CircadianEngine {
                     room_id: room_id.clone(),
                     update: RoomStateUpdate::LightsOn {
                         brightness: Some(target.brightness),
-                        color_temp_mired: Some(target.color_temp_mired),
+                        color_temp_mired: Some(published_ct),
                         source: UpdateSource::Circadian,
                     },
                 })
@@ -258,7 +320,10 @@ impl CircadianEngine {
                 .state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.clone(),
-                    update: RoomStateUpdate::JehaPush,
+                    update: RoomStateUpdate::JehaPush {
+                        brightness: Some(target.brightness),
+                        color_temp_mired: Some(published_ct),
+                    },
                 })
                 .await;
 
@@ -301,7 +366,7 @@ impl CircadianEngine {
                 .get(ieee)
                 .is_some_and(|d| d.supports_color_temp);
             let ct = if supports_color_temp {
-                Some(target.color_temp_mired)
+                Some(self.clamp_color_temp_for_device(ieee, target.color_temp_mired))
             } else {
                 None
             };
@@ -319,7 +384,10 @@ impl CircadianEngine {
                 .state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.clone(),
-                    update: RoomStateUpdate::JehaPush,
+                    update: RoomStateUpdate::JehaPush {
+                        brightness: Some(target.brightness),
+                        color_temp_mired: ct,
+                    },
                 })
                 .await;
 

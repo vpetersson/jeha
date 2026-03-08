@@ -446,7 +446,10 @@ impl McpToolHandler {
             .state_tx
             .send(StateCommand::UpdateRoomState {
                 room_id: room_id.to_string(),
-                update: RoomStateUpdate::JehaPush,
+                update: RoomStateUpdate::JehaPush {
+                    brightness,
+                    color_temp_mired: ct_mired,
+                },
             })
             .await;
 
@@ -831,7 +834,10 @@ impl McpToolHandler {
             .state_tx
             .send(StateCommand::UpdateRoomState {
                 room_id: room_id.to_string(),
-                update: RoomStateUpdate::JehaPush,
+                update: RoomStateUpdate::JehaPush {
+                    brightness: None,
+                    color_temp_mired: None,
+                },
             })
             .await;
 
