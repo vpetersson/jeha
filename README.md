@@ -2,18 +2,18 @@
 
 Opinionated, batteries-included light automation daemon for [Zigbee2MQTT](https://www.zigbee2mqtt.io/).
 
-jeha does one thing well: **lighting**. Circadian rhythms, motion-activated lights, night mode, scenes — all with sensible defaults that work out of the box. Point it at your Z2M instance and your lights just work. For everything else (climate, media, blinds, complex automations), use [Home Assistant](https://www.home-assistant.io/) or similar.
+jeha does one thing well: **lighting**. Circadian rhythms, motion-activated lights, night mode, scenes - all with sensible defaults that work out of the box. Point it at your Z2M instance and your lights just work. For everything else (climate, media, blinds, complex automations), use [Home Assistant](https://www.home-assistant.io/) or similar.
 
 ## Why
 
-The best home automation interface is no interface. Lights should just work — right color temperature, right brightness, right time of day — without anyone touching an app. See [this post](https://vpetersson.com/2025/06/07/home-assistant-revamp/) for the full rationale.
+The best home automation interface is no interface. Lights should just work: right color temperature, right brightness, right time of day, without anyone touching an app. See [this post](https://vpetersson.com/2025/06/07/home-assistant-revamp/) for the full rationale.
 
-Home Assistant is great at being a general-purpose platform, but that generality comes with complexity. Light automations break in predictable ways: devices vanish when renamed, Flux updates lights that are off, motion sensors fail silently, config reloads are all-or-nothing. jeha takes the opposite approach — a focused Rust daemon that only does lighting, talks directly to Z2M over MQTT, and makes the common case trivial.
+Home Assistant is great at being a general-purpose platform, but that generality comes with complexity. Light automations break in predictable ways: devices vanish when renamed, Flux updates lights that are off, motion sensors fail silently, config reloads are all-or-nothing. jeha takes the opposite approach: a focused Rust daemon that only does lighting, talks directly to Z2M over MQTT, and makes the common case trivial.
 
 ## Philosophy
 
 - **Sensible defaults.** Define a room with a Z2M group and you get circadian lighting. Add a motion sensor and lights turn on/off automatically. No YAML, no templates, no automations to write.
-- **Batteries included.** Circadian curves, motion timeouts, night mode, scenes, lights-out schedules — built in. The 90% case should need zero config beyond naming your rooms.
+- **Batteries included.** Circadian curves, motion timeouts, night mode, scenes, lights-out schedules, all built in. The 90% case should need zero config beyond naming your rooms.
 - **Lighting only.** jeha is deliberately not a general-purpose home automation platform. It does lighting extremely well and nothing else. Use it alongside Home Assistant, not instead of it.
 - **Convention over configuration.** Rooms with motion sensors get automatic on/off behavior. Circadian defaults are tuned for residential use. Override when you need to, but most people won't.
 
