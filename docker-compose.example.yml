@@ -1,0 +1,40 @@
+services:
+  jeha:
+    container_name: jeha
+    build: jeha/
+    restart: unless-stopped
+    volumes:
+      - ./config.toml:/config.toml
+    environment:
+      - JEHA_MQTT_HOST=mqtt
+    logging:
+      driver: journald
+
+  zigbee2mqtt:
+    container_name: zigbee2mqtt
+    image: koenkk/zigbee2mqtt
+    pull_policy: always
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    devices:
+      - /dev/serial/by-id/your-zigbee-adapter:/dev/ttyACM0
+    volumes:
+      - ./zigbee2mqtt:/app/data
+      - /run/udev:/run/udev:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      - TZ=Europe/London
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    container_name: mqtt
+    restart: unless-stopped
+    pull_policy: always
+    volumes:
+      - ./mosquitto:/mosquitto
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - "127.0.0.1:1883:1883"
+      - "127.0.0.1:9001:9001"
+    command: "mosquitto -c /mosquitto-no-auth.conf"
