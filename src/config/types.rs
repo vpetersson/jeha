@@ -53,6 +53,21 @@ pub struct GeneralConfig {
     /// Default motion timeout for all rooms with motion sensors (seconds).
     #[serde(default = "default_motion_timeout_secs")]
     pub motion_timeout_secs: u64,
+    /// Brightness drift tolerance for external change detection (0-254).
+    /// Z2M echoes within this range are ignored. Default: 15.
+    #[serde(default = "default_external_brightness_tolerance")]
+    pub external_brightness_tolerance: u64,
+    /// Color temp drift tolerance for external change detection (mired).
+    /// Z2M echoes within this range are ignored. Default: 25.
+    #[serde(default = "default_external_color_temp_tolerance")]
+    pub external_color_temp_tolerance: u64,
+    /// How long to pause circadian after detecting an external light change (seconds).
+    /// Default: 1800 (30 minutes).
+    #[serde(default = "default_external_override_secs")]
+    pub external_override_secs: u64,
+    /// Remote brightness step per click (1-254). Default: 25.
+    #[serde(default = "default_remote_brightness_step")]
+    pub remote_brightness_step: u8,
 }
 
 fn default_motion_timeout_secs() -> u64 {
@@ -61,6 +76,19 @@ fn default_motion_timeout_secs() -> u64 {
 
 fn default_timezone() -> String {
     "UTC".to_string()
+}
+
+fn default_external_brightness_tolerance() -> u64 {
+    15
+}
+fn default_external_color_temp_tolerance() -> u64 {
+    25
+}
+fn default_external_override_secs() -> u64 {
+    1800
+}
+fn default_remote_brightness_step() -> u8 {
+    25
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]

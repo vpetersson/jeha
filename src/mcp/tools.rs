@@ -177,11 +177,6 @@ impl McpToolHandler {
                 "description": "Get system health: MQTT connection status, Zigbee2MQTT online status, uptime, and counts of discovered devices/groups/rooms.",
                 "inputSchema": { "type": "object", "properties": {} }
             }),
-            json!({
-                "name": "reload_config",
-                "description": "Trigger a config reload from disk. Validates the new config first — if invalid, keeps running with the old config.",
-                "inputSchema": { "type": "object", "properties": {} }
-            }),
         ]
     }
 
@@ -252,7 +247,6 @@ impl McpToolHandler {
             }
             "get_circadian_status" => Ok(self.get_circadian_status()),
             "get_system_status" => Ok(self.get_system_status()),
-            "reload_config" => Ok(json!({"status": "reload not yet implemented at runtime"})),
             _ => Err(format!("Unknown tool: {}", name)),
         }
     }

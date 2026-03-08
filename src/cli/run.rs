@@ -183,7 +183,7 @@ pub async fn run_daemon(
     // 8. Log ready
     info!("jeha started");
 
-    // Set up SIGHUP for config reload
+    // Set up SIGHUP for config validation (hot reload not yet supported — restart to apply)
     let reload_config_path = config_path.to_path_buf();
     tokio::spawn(async move {
         let mut sig = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
@@ -195,17 +195,17 @@ pub async fn run_daemon(
         };
         loop {
             sig.recv().await;
-            info!("SIGHUP received, reloading config...");
+            info!("SIGHUP received, validating config...");
             match config::load_config(&reload_config_path) {
                 Ok(new_config) => {
                     info!(
-                        "Config reloaded: {} rooms, {} automations",
+                        "Config valid: {} rooms, {} automations. Restart jeha to apply.",
                         new_config.rooms.len(),
                         new_config.automations.len()
                     );
                 }
                 Err(e) => {
-                    tracing::error!("Config reload failed, keeping old config: {}", e);
+                    tracing::error!("Config validation failed: {}", e);
                 }
             }
         }

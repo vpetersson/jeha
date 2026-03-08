@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{Datelike, Utc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
@@ -51,7 +52,7 @@ impl LightsOutTask {
             self.config.lights_out.time
         );
 
-        let mut fired_today = false;
+        let mut last_fired_date: Option<u32> = None;
         let mut interval = tokio::time::interval(Duration::from_secs(30));
 
         loop {
@@ -61,17 +62,16 @@ impl LightsOutTask {
                     return;
                 }
                 _ = interval.tick() => {
+                    let tz: chrono_tz::Tz = self.config.general.timezone.parse().unwrap_or(chrono_tz::UTC);
+                    let local = Utc::now().with_timezone(&tz);
+                    let today = local.ordinal();
                     let now = LocalNow::now(&self.config.general.timezone);
                     let now_minutes = now.minutes as u32;
 
-                    // Reset the flag when we move past the target window
-                    if now_minutes.abs_diff(target_minutes) > 2 {
-                        fired_today = false;
-                    }
+                    let already_fired = last_fired_date == Some(today);
 
-                    // Fire if we're within the target minute and haven't fired yet
-                    if !fired_today && now_minutes == target_minutes {
-                        fired_today = true;
+                    if !already_fired && now_minutes == target_minutes {
+                        last_fired_date = Some(today);
                         if let Err(e) = self.turn_off_all().await {
                             warn!("Lights-out failed: {}", e);
                         }

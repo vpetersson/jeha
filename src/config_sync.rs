@@ -122,10 +122,12 @@ impl ConfigSync {
             info!("Auto-discovered new room: '{}' (group '{}')", room_id, group_name);
         }
 
-        // Read existing config, append, write back
+        // Read existing config, append, write back atomically (temp file + rename)
         let existing = tokio::fs::read_to_string(&self.config_path).await?;
         let updated = format!("{}{}", existing.trim_end(), additions);
-        tokio::fs::write(&self.config_path, updated).await?;
+        let tmp_path = self.config_path.with_extension("toml.tmp");
+        tokio::fs::write(&tmp_path, &updated).await?;
+        tokio::fs::rename(&tmp_path, &self.config_path).await?;
 
         info!(
             "Config updated with {} new room(s). Restart or SIGHUP to apply.",

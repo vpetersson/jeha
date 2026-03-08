@@ -124,7 +124,39 @@ pub async fn execute_action(
                 publisher
                     .turn_on_group(group, Some(*brightness), None, trans)
                     .await?;
+            } else {
+                for ieee in &room_config.lights {
+                    publisher
+                        .turn_on_ieee(ieee, Some(*brightness), None, trans)
+                        .await?;
+                }
             }
+
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.to_string(),
+                    update: RoomStateUpdate::LightsOn {
+                        brightness: Some(*brightness),
+                        color_temp_mired: None,
+                        source: UpdateSource::Manual,
+                    },
+                })
+                .await;
+
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.to_string(),
+                    update: RoomStateUpdate::JehaPush {
+                        brightness: Some(*brightness),
+                        color_temp_mired: None,
+                    },
+                })
+                .await;
+
+            debug!(
+                "Set brightness {} in room '{}'",
+                brightness, room_id
+            );
         }
 
         ActionConfig::SetColorTemp {
@@ -137,7 +169,39 @@ pub async fn execute_action(
                 publisher
                     .turn_on_group(group, None, Some(ct_mired), trans)
                     .await?;
+            } else {
+                for ieee in &room_config.lights {
+                    publisher
+                        .turn_on_ieee(ieee, None, Some(ct_mired), trans)
+                        .await?;
+                }
             }
+
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.to_string(),
+                    update: RoomStateUpdate::LightsOn {
+                        brightness: None,
+                        color_temp_mired: Some(ct_mired),
+                        source: UpdateSource::Manual,
+                    },
+                })
+                .await;
+
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.to_string(),
+                    update: RoomStateUpdate::JehaPush {
+                        brightness: None,
+                        color_temp_mired: Some(ct_mired),
+                    },
+                })
+                .await;
+
+            debug!(
+                "Set color temp {}K ({}mired) in room '{}'",
+                color_temp_k, ct_mired, room_id
+            );
         }
     }
 

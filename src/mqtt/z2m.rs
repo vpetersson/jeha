@@ -379,21 +379,23 @@ async fn handle_device_state(
 
         if outside_quiet_window {
             // Compare against intended values (not current_*, which drifts from Z2M echoes)
+            let brightness_tolerance = config.general.external_brightness_tolerance;
+            let color_temp_tolerance = config.general.external_color_temp_tolerance;
             let brightness_changed = match (has_brightness, room_state.intended_brightness) {
                 (Some(reported), Some(expected)) => {
-                    (reported as i64 - expected as i64).unsigned_abs() > 15
+                    (reported as i64 - expected as i64).unsigned_abs() > brightness_tolerance
                 }
                 _ => false,
             };
             let color_temp_changed = match (has_color_temp, room_state.intended_color_temp_mired) {
                 (Some(reported), Some(expected)) => {
-                    (reported as i64 - expected as i64).unsigned_abs() > 25
+                    (reported as i64 - expected as i64).unsigned_abs() > color_temp_tolerance
                 }
                 _ => false,
             };
 
             if brightness_changed || color_temp_changed {
-                let external_override_secs = 30 * 60; // 30 minutes
+                let external_override_secs = config.general.external_override_secs;
                 info!(
                     "External light change detected in room '{}' (via '{}'): \
                      brightness {:?}->{:?} (intended {:?}), color_temp {:?}->{:?} (intended {:?}). \

@@ -531,13 +531,14 @@ impl AutomationEngine {
                 }
 
                 RemoteActionType::BrightnessUp => {
+                    let step = self.config.general.remote_brightness_step;
                     let current = self.state.load();
                     let current_brightness = current
                         .rooms
                         .get(room_id)
                         .and_then(|rs| rs.current_brightness)
                         .unwrap_or(128);
-                    let new_brightness = current_brightness.saturating_add(25).min(254);
+                    let new_brightness = current_brightness.saturating_add(step).min(254);
 
                     debug!(
                         "Remote: brightness up in '{}': {} -> {}",
@@ -548,13 +549,14 @@ impl AutomationEngine {
                 }
 
                 RemoteActionType::BrightnessDown => {
+                    let step = self.config.general.remote_brightness_step;
                     let current = self.state.load();
                     let current_brightness = current
                         .rooms
                         .get(room_id)
                         .and_then(|rs| rs.current_brightness)
                         .unwrap_or(128);
-                    let new_brightness = current_brightness.saturating_sub(25).max(1);
+                    let new_brightness = current_brightness.saturating_sub(step).max(1);
 
                     debug!(
                         "Remote: brightness down in '{}': {} -> {}",

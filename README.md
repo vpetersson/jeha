@@ -218,7 +218,6 @@ jeha exposes tools via MCP (Streamable HTTP on port 8420):
 | `set_night_mode` | Toggle night mode |
 | `get_circadian_status` | Current targets for all rooms |
 | `get_system_status` | MQTT/Z2M connection, uptime, device counts |
-| `reload_config` | Reload config from disk (validates first) |
 
 ## Circadian curve
 
