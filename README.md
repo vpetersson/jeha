@@ -36,13 +36,14 @@ Home Assistant is great at being a general-purpose platform, but that generality
 ## Quick start
 
 ```sh
-cargo build --release
-./target/release/jeha init --mqtt localhost:1883 --output config.toml
+docker run --rm -v $(pwd):/out vpetersson/jeha:latest init --mqtt <mqtt-host>:1883 --output /out/config.toml
 # Review and edit config.toml
-./target/release/jeha run
+docker run -d --name jeha --restart unless-stopped \
+  -v $(pwd)/config.toml:/config.toml \
+  vpetersson/jeha:latest
 ```
 
-`jeha init` connects to Z2M, discovers groups and devices, and generates a starter config.
+`jeha init` connects to Z2M, discovers groups and devices, and generates a starter config. See [docker-compose.example.yml](docker-compose.example.yml) for a full stack example.
 
 ## Configuration
 
@@ -259,6 +260,18 @@ Claude (MCP client)
     | MQTT
     v
 Zigbee2MQTT -> Zigbee devices
+```
+
+## Building from source
+
+```sh
+cargo build --release --target $(uname -m)-unknown-linux-musl
+```
+
+Or with Docker:
+
+```sh
+docker build -t jeha .
 ```
 
 ## License
