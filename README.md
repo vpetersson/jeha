@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt="jeha logo" width="200">
+</p>
+
 # jeha
 
 Opinionated, batteries-included light automation daemon for [Zigbee2MQTT](https://www.zigbee2mqtt.io/).
