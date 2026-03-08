@@ -80,8 +80,6 @@ jobs:
     name: Docker
     needs: build
     runs-on: ubuntu-latest
-    environment: dockerhub
-    permissions: {}
     steps:
       - uses: actions/checkout@v4
 
