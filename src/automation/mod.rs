@@ -266,14 +266,24 @@ impl AutomationEngine {
 
                 for (room_id, room_config, timeout_secs) in rooms {
                     // Cancel existing off-timer
-                    if let Some(handle) = self.motion_off_handles.remove(&room_id) {
+                    let had_existing = if let Some(handle) = self.motion_off_handles.remove(&room_id) {
                         handle.abort();
-                    }
+                        true
+                    } else {
+                        false
+                    };
 
-                    info!(
-                        "Built-in motion: scheduling lights off in '{}' after {}s",
-                        room_id, timeout_secs
-                    );
+                    if had_existing {
+                        debug!(
+                            "Built-in motion: resetting off-timer for '{}' ({}s)",
+                            room_id, timeout_secs
+                        );
+                    } else {
+                        info!(
+                            "Built-in motion: scheduling lights off in '{}' after {}s",
+                            room_id, timeout_secs
+                        );
+                    }
 
                     let publisher = self.publisher.clone();
                     let state_tx = self.state_tx.clone();
