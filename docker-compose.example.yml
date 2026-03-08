@@ -1,7 +1,8 @@
 services:
   jeha:
     container_name: jeha
-    build: jeha/
+    image: vpetersson/jeha:latest
+    pull_policy: always
     restart: unless-stopped
     volumes:
       - ./config.toml:/config.toml
