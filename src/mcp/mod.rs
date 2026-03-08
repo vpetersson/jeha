@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use tracing::{info, warn};
 
+use crate::circadian::CircadianEngine;
 use crate::config::types::AppConfig;
 use crate::event::EventBus;
 use crate::mqtt::publish::Publisher;
@@ -27,10 +28,11 @@ pub async fn start_mcp_server(
     publisher: Arc<Publisher>,
     config: Arc<AppConfig>,
     event_bus: EventBus,
+    circadian_engine: Option<Arc<CircadianEngine>>,
 ) -> Result<()> {
     info!("Starting MCP server on {}", bind_addr);
 
-    let handler = Arc::new(McpToolHandler::new(state, state_tx, publisher, config, event_bus));
+    let handler = Arc::new(McpToolHandler::new(state, state_tx, publisher, config, event_bus, circadian_engine));
 
     let addr: std::net::SocketAddr = bind_addr.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;

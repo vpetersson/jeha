@@ -42,7 +42,7 @@ impl Default for NightModeDefaults {
     fn default() -> Self {
         Self {
             color_temp_k: 2000,
-            brightness: 1,
+            brightness: 2,
             motion_timeout_secs: 120,
         }
     }

@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
+use crate::circadian::CircadianEngine;
 use crate::config::types::{AppConfig, RoomConfig};
 use crate::event::{Event, EventBus};
 use crate::mqtt::publish::Publisher;
@@ -97,11 +98,15 @@ pub async fn activate_night_mode(
     Ok(())
 }
 
-/// Deactivate night mode for a room: clear flag, resume circadian.
+/// Deactivate night mode for a room: clear flag, resume circadian, push circadian values.
 pub async fn deactivate_night_mode(
     room_id: &str,
+    room_config: &RoomConfig,
+    publisher: &Publisher,
+    state: &SharedState,
     state_tx: &mpsc::Sender<StateCommand>,
     event_bus: &EventBus,
+    circadian_engine: &Option<Arc<CircadianEngine>>,
 ) -> Result<()> {
     let _ = state_tx
         .send(StateCommand::UpdateRoomState {
@@ -120,7 +125,7 @@ pub async fn deactivate_night_mode(
         })
         .await;
 
-    // Reset source to circadian so the engine takes over
+    // Reset source to circadian
     let _ = state_tx
         .send(StateCommand::UpdateRoomState {
             room_id: room_id.to_string(),
@@ -131,6 +136,54 @@ pub async fn deactivate_night_mode(
             },
         })
         .await;
+
+    // Actively push circadian values so lights change immediately
+    let lights_on = state
+        .load()
+        .rooms
+        .get(room_id)
+        .map(|rs| rs.lights_on)
+        .unwrap_or(false);
+
+    if lights_on {
+        if let Some(engine) = circadian_engine {
+            if let Some(target) = engine.compute_room_target(room_id) {
+                let ct_mired = Some(target.color_temp_mired);
+                if let Some(ref group) = room_config.z2m_group {
+                    let _ = publisher
+                        .turn_on_group(group, Some(target.brightness), ct_mired, Some(3))
+                        .await;
+                } else {
+                    for ieee in &room_config.lights {
+                        let _ = publisher
+                            .turn_on_ieee(ieee, Some(target.brightness), ct_mired, Some(3))
+                            .await;
+                    }
+                }
+
+                let _ = state_tx
+                    .send(StateCommand::UpdateRoomState {
+                        room_id: room_id.to_string(),
+                        update: RoomStateUpdate::LightsOn {
+                            brightness: Some(target.brightness),
+                            color_temp_mired: ct_mired,
+                            source: UpdateSource::Circadian,
+                        },
+                    })
+                    .await;
+
+                let _ = state_tx
+                    .send(StateCommand::UpdateRoomState {
+                        room_id: room_id.to_string(),
+                        update: RoomStateUpdate::JehaPush {
+                            brightness: Some(target.brightness),
+                            color_temp_mired: ct_mired,
+                        },
+                    })
+                    .await;
+            }
+        }
+    }
 
     event_bus.publish(Event::NightModeChanged {
         room_id: room_id.to_string(),
@@ -148,6 +201,7 @@ pub struct NightModeScheduler {
     publisher: Arc<Publisher>,
     event_bus: EventBus,
     cancel: CancellationToken,
+    circadian_engine: Option<Arc<CircadianEngine>>,
     /// Rooms manually deactivated during current schedule window (suppress re-activation).
     suppressed: HashSet<String>,
 }
@@ -160,6 +214,7 @@ impl NightModeScheduler {
         publisher: Arc<Publisher>,
         event_bus: EventBus,
         cancel: CancellationToken,
+        circadian_engine: Option<Arc<CircadianEngine>>,
     ) -> Self {
         Self {
             config,
@@ -168,6 +223,7 @@ impl NightModeScheduler {
             publisher,
             event_bus,
             cancel,
+            circadian_engine,
             suppressed: HashSet::new(),
         }
     }
@@ -240,8 +296,16 @@ impl NightModeScheduler {
                 .await;
             } else if !in_window && is_active {
                 info!("Night mode schedule: deactivating '{}'", room_id);
-                let _ =
-                    deactivate_night_mode(room_id, &self.state_tx, &self.event_bus).await;
+                let _ = deactivate_night_mode(
+                    room_id,
+                    room_config,
+                    &self.publisher,
+                    &self.state,
+                    &self.state_tx,
+                    &self.event_bus,
+                    &self.circadian_engine,
+                )
+                .await;
             }
 
             // Clear suppression when we exit the window

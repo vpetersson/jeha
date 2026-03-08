@@ -541,8 +541,12 @@ impl AutomationEngine {
                     info!("Remote: resuming day mode in '{}'", room_id);
                     if let Err(e) = crate::night_mode::deactivate_night_mode(
                         room_id,
+                        room_config,
+                        &self.publisher,
+                        &self.state,
                         &self.state_tx,
                         &self.event_bus,
+                        &self.circadian_engine,
                     )
                     .await
                     {

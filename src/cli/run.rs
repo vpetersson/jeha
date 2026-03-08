@@ -120,7 +120,7 @@ pub async fn run_daemon(
         publisher.clone(),
         event_bus.clone(),
         cancel.child_token(),
-        Some(circadian_for_automations),
+        Some(circadian_for_automations.clone()),
     );
     tokio::spawn(automation.run());
 
@@ -152,6 +152,7 @@ pub async fn run_daemon(
         publisher.clone(),
         event_bus.clone(),
         cancel.child_token(),
+        Some(circadian_for_automations.clone()),
     );
     tokio::spawn(night_scheduler.run());
 
@@ -162,6 +163,7 @@ pub async fn run_daemon(
     let mcp_bind = app_config.mcp.bind.clone();
     let mcp_config = app_config.clone();
     let mcp_event_bus = event_bus.clone();
+    let mcp_circadian = Some(circadian_for_automations);
     tokio::spawn(async move {
         if let Err(e) = mcp::start_mcp_server(
             &mcp_bind,
@@ -170,6 +172,7 @@ pub async fn run_daemon(
             mcp_publisher,
             mcp_config,
             mcp_event_bus,
+            mcp_circadian,
         )
         .await
         {

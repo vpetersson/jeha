@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
+use crate::circadian::CircadianEngine;
 use crate::config::types::AppConfig;
 use crate::event::EventBus;
 use crate::mqtt::publish::Publisher;
@@ -16,6 +17,7 @@ pub struct McpToolHandler {
     publisher: Arc<Publisher>,
     config: Arc<AppConfig>,
     event_bus: EventBus,
+    circadian_engine: Option<Arc<CircadianEngine>>,
 }
 
 impl McpToolHandler {
@@ -25,6 +27,7 @@ impl McpToolHandler {
         publisher: Arc<Publisher>,
         config: Arc<AppConfig>,
         event_bus: EventBus,
+        circadian_engine: Option<Arc<CircadianEngine>>,
     ) -> Self {
         Self {
             state,
@@ -32,6 +35,7 @@ impl McpToolHandler {
             publisher,
             config,
             event_bus,
+            circadian_engine,
         }
     }
 
@@ -897,9 +901,17 @@ impl McpToolHandler {
                 "description": format!("{}: night mode on (brightness {}, {}K). Circadian paused.", display_name, enm.brightness, enm.color_temp_k)
             }))
         } else {
-            crate::night_mode::deactivate_night_mode(room_id, &self.state_tx, &self.event_bus)
-                .await
-                .map_err(|e| e.to_string())?;
+            crate::night_mode::deactivate_night_mode(
+                room_id,
+                room_config,
+                &self.publisher,
+                &self.state,
+                &self.state_tx,
+                &self.event_bus,
+                &self.circadian_engine,
+            )
+            .await
+            .map_err(|e| e.to_string())?;
 
             Ok(json!({
                 "status": "ok",
