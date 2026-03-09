@@ -8,6 +8,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::calibration;
 use crate::config::types::{AppConfig, RoomConfig};
 use crate::event::{Event, EventBus};
 use crate::mqtt::publish::Publisher;
@@ -166,6 +167,27 @@ impl CircadianEngine {
         clamped
     }
 
+    /// Get all device IEEEs for a room — from explicit lights list, or from group members.
+    fn lights_for_room(
+        &self,
+        room_config: &RoomConfig,
+        state: &crate::state::SystemState,
+    ) -> Vec<String> {
+        if !room_config.lights.is_empty() {
+            return room_config.lights.clone();
+        }
+        if let Some(ref group_name) = room_config.z2m_group
+            && let Some(group) = state.group_map.get(group_name)
+        {
+            return group
+                .members
+                .iter()
+                .map(|m| m.ieee_address.clone())
+                .collect();
+        }
+        Vec::new()
+    }
+
     pub fn compute_room_target(&self, room_id: &str) -> Option<CircadianTarget> {
         let room_config = self.config.rooms.get(room_id)?;
         if !room_config.circadian_enabled {
@@ -268,14 +290,32 @@ impl CircadianEngine {
             }
 
             let published_ct;
-            if let Some(ref group) = room_config.z2m_group {
+            let use_group = room_config.z2m_group.as_ref().and_then(|group_name| {
+                let group = current_state.group_map.get(group_name)?;
+                if calibration::group_needs_fanout(
+                    group,
+                    &self.config.light_calibration,
+                    &current_state.device_map,
+                ) {
+                    debug!(
+                        "Room '{}': fan-out due to calibration differences in group '{}'",
+                        room_id, group_name
+                    );
+                    None
+                } else {
+                    Some(group_name.clone())
+                }
+            });
+
+            if let Some(ref group) = use_group {
                 published_ct = self.clamp_color_temp_for_group(group, target.color_temp_mired);
                 self.publisher
                     .push_circadian_group(group, target.brightness, published_ct, transition)
                     .await?;
             } else {
                 published_ct = target.color_temp_mired;
-                for ieee in &room_config.lights {
+                let lights = self.lights_for_room(room_config, &current_state);
+                for ieee in &lights {
                     let supports_color_temp = current_state
                         .device_map
                         .get(ieee)
@@ -285,6 +325,7 @@ impl CircadianEngine {
                     } else {
                         None
                     };
+                    // Calibration is applied inside turn_on_ieee
                     self.publisher
                         .turn_on_ieee(ieee, Some(target.brightness), ct, Some(transition))
                         .await?;

@@ -403,24 +403,30 @@ impl McpToolHandler {
         self.validate_room(room_id)?;
         let ct_mired = color_temp_k.map(|k| (1_000_000u32 / k as u32) as u16);
 
-        let group = self
-            .config
-            .rooms
-            .get(room_id)
-            .and_then(|r| r.z2m_group.as_deref());
+        let room_config = self.config.rooms.get(room_id);
+        let use_group = room_config
+            .and_then(|r| r.z2m_group.as_ref())
+            .and_then(|group_name| {
+                let current = self.state.load();
+                let group = current.group_map.get(group_name)?;
+                if crate::calibration::group_needs_fanout(
+                    group,
+                    &self.config.light_calibration,
+                    &current.device_map,
+                ) {
+                    None
+                } else {
+                    Some(group_name.clone())
+                }
+            });
 
-        if let Some(group) = group {
+        if let Some(ref group) = use_group {
             self.publisher
                 .turn_on_group(group, brightness, ct_mired, transition)
                 .await
                 .map_err(|e| e.to_string())?;
         } else {
-            let lights = self
-                .config
-                .rooms
-                .get(room_id)
-                .map(|r| r.lights.clone())
-                .unwrap_or_default();
+            let lights = self.lights_for_room(room_id);
             for ieee in &lights {
                 let _ = self
                     .publisher
@@ -968,6 +974,27 @@ impl McpToolHandler {
                 available.join(", ")
             ))
         }
+    }
+
+    /// Get all device IEEEs for a room — from explicit lights list, or from group members.
+    fn lights_for_room(&self, room_id: &str) -> Vec<String> {
+        let room_config = self.config.rooms.get(room_id);
+        if let Some(rc) = room_config {
+            if !rc.lights.is_empty() {
+                return rc.lights.clone();
+            }
+            if let Some(ref group_name) = rc.z2m_group {
+                let current = self.state.load();
+                if let Some(group) = current.group_map.get(group_name) {
+                    return group
+                        .members
+                        .iter()
+                        .map(|m| m.ieee_address.clone())
+                        .collect();
+                }
+            }
+        }
+        Vec::new()
     }
 
     fn display_name(&self, room_id: &str) -> String {

@@ -90,6 +90,54 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
         "circadian.defaults.end_temp_k",
     )?;
 
+    // Validate light calibration
+    if config.light_calibration.rgbw_color_temp_offset.abs() > 100 {
+        bail!(
+            "light_calibration.rgbw_color_temp_offset must be between -100 and 100, got {}",
+            config.light_calibration.rgbw_color_temp_offset
+        );
+    }
+    if config.light_calibration.rgbw_brightness_offset.abs() > 100 {
+        bail!(
+            "light_calibration.rgbw_brightness_offset must be between -100 and 100, got {}",
+            config.light_calibration.rgbw_brightness_offset
+        );
+    }
+
+    let all_lights: Vec<&str> = config
+        .rooms
+        .values()
+        .flat_map(|r| r.lights.iter().map(|s| s.as_str()))
+        .collect();
+
+    for (ieee, ovr) in &config.light_calibration.overrides {
+        validate_ieee(ieee, &format!("light_calibration.overrides.{}", ieee))?;
+        if let Some(ct) = ovr.color_temp_offset
+            && ct.abs() > 100
+        {
+            bail!(
+                "light_calibration.overrides.{}.color_temp_offset must be between -100 and 100, got {}",
+                ieee,
+                ct
+            );
+        }
+        if let Some(br) = ovr.brightness_offset
+            && br.abs() > 100
+        {
+            bail!(
+                "light_calibration.overrides.{}.brightness_offset must be between -100 and 100, got {}",
+                ieee,
+                br
+            );
+        }
+        if !all_lights.contains(&ieee.as_str()) {
+            warn!(
+                "light_calibration.overrides contains IEEE {} which doesn't appear in any room's lights list",
+                ieee
+            );
+        }
+    }
+
     for automation in &config.automations {
         if automation.id.is_empty() {
             bail!("Automation must have a non-empty id.");

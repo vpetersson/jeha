@@ -20,6 +20,33 @@ pub struct Z2mDeviceInfo {
     pub supports_color_hs: bool,
 }
 
+/// Light type derived from Z2M device capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LightType {
+    /// Has color_temp AND (color_xy OR color_hs) — RGBW bulbs
+    Rgbw,
+    /// Has color_temp only — dedicated CT lights
+    CtOnly,
+    /// Has brightness only
+    BrightnessOnly,
+    /// None of the above (on/off only or unsupported)
+    OnOff,
+}
+
+impl Z2mDeviceInfo {
+    pub fn light_type(&self) -> LightType {
+        if self.supports_color_temp && (self.supports_color_xy || self.supports_color_hs) {
+            LightType::Rgbw
+        } else if self.supports_color_temp {
+            LightType::CtOnly
+        } else if self.supports_brightness {
+            LightType::BrightnessOnly
+        } else {
+            LightType::OnOff
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Z2mScene {
     pub id: u16,
