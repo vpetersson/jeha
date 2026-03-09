@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use rumqttc::{AsyncClient, QoS};
 use serde_json::json;
 use tracing::{debug, warn};
 
+use crate::calibration;
+use crate::config::types::AppConfig;
 use crate::state::SharedState;
 
 use super::z2m;
@@ -11,14 +15,21 @@ pub struct Publisher {
     client: AsyncClient,
     base_topic: String,
     state: SharedState,
+    config: Arc<AppConfig>,
 }
 
 impl Publisher {
-    pub fn new(client: AsyncClient, base_topic: String, state: SharedState) -> Self {
+    pub fn new(
+        client: AsyncClient,
+        base_topic: String,
+        state: SharedState,
+        config: Arc<AppConfig>,
+    ) -> Self {
         Self {
             client,
             base_topic,
             state,
+            config,
         }
     }
 
@@ -90,12 +101,30 @@ impl Publisher {
         color_temp_mired: Option<u16>,
         transition: Option<u32>,
     ) -> Result<()> {
+        let current = self.state.load();
+        let cal = calibration::resolve_for_device(ieee, &self.config, &current.device_map);
+        let device_info = current.device_map.get(ieee);
+
         let mut payload = json!({"state": "ON"});
         if let Some(b) = brightness {
-            payload["brightness"] = json!(b);
+            let calibrated = cal.apply_brightness(b);
+            if calibrated != b {
+                debug!(
+                    "Calibration for {}: brightness {} -> {}",
+                    ieee, b, calibrated
+                );
+            }
+            payload["brightness"] = json!(calibrated);
         }
         if let Some(ct) = color_temp_mired {
-            payload["color_temp"] = json!(ct);
+            let calibrated = cal.apply_color_temp(ct, device_info);
+            if calibrated != ct {
+                debug!(
+                    "Calibration for {}: color_temp {} -> {} mired",
+                    ieee, ct, calibrated
+                );
+            }
+            payload["color_temp"] = json!(calibrated);
         }
         if let Some(t) = transition {
             payload["transition"] = json!(t);

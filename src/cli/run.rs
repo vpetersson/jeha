@@ -85,6 +85,7 @@ pub async fn run_daemon(
         mqtt_client,
         app_config.mqtt.base_topic.clone(),
         shared_state.clone(),
+        app_config.clone(),
     ));
 
     // 3-4. Start MQTT event loop (subscribes on connect)

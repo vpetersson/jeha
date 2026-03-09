@@ -23,6 +23,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub rooms: HashMap<String, RoomConfig>,
     #[serde(default)]
+    pub light_calibration: LightCalibrationConfig,
+    #[serde(default)]
     pub automations: Vec<AutomationConfig>,
 }
 
@@ -238,6 +240,45 @@ pub struct AutomationConfig {
 pub enum TriggerConfig {
     Motion,
     MotionCleared,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LightCalibrationConfig {
+    /// Auto-apply RGBW corrections (default: true)
+    #[serde(default = "default_true")]
+    pub auto_defaults: bool,
+    /// Default mired offset for RGBW lights (positive = warmer)
+    #[serde(default = "default_rgbw_color_temp_offset")]
+    pub rgbw_color_temp_offset: i16,
+    /// Default brightness offset for RGBW lights
+    #[serde(default)]
+    pub rgbw_brightness_offset: i16,
+    /// Per-light overrides keyed by IEEE address
+    #[serde(default)]
+    pub overrides: HashMap<String, LightCalibrationOverride>,
+}
+
+impl Default for LightCalibrationConfig {
+    fn default() -> Self {
+        Self {
+            auto_defaults: true,
+            rgbw_color_temp_offset: 15,
+            rgbw_brightness_offset: 0,
+            overrides: HashMap::new(),
+        }
+    }
+}
+
+fn default_rgbw_color_temp_offset() -> i16 {
+    15
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct LightCalibrationOverride {
+    /// Color temp offset in mired (positive = warmer)
+    pub color_temp_offset: Option<i16>,
+    /// Brightness offset (additive, clamped to 1-254)
+    pub brightness_offset: Option<i16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

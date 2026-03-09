@@ -1,4 +1,5 @@
 pub mod automation;
+pub mod calibration;
 pub mod circadian;
 pub mod cli;
 pub mod config;
