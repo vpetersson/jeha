@@ -105,7 +105,7 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tags=vpetersson/jeha:${VERSION},vpetersson/jeha:latest" >> "$GITHUB_OUTPUT"
+          echo "tags=vpetersson/jeha:${VERSION}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
