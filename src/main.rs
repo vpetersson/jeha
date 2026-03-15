@@ -22,9 +22,9 @@ async fn main() -> Result<()> {
             mqtt_host,
             mqtt_port,
             mqtt_topic,
-            mcp_bind,
+            api_bind,
         } => {
-            jeha::cli::run::run_daemon(&config, mqtt_host, mqtt_port, mqtt_topic, mcp_bind).await?;
+            jeha::cli::run::run_daemon(&config, mqtt_host, mqtt_port, mqtt_topic, api_bind).await?;
         }
         Commands::Validate {
             config: config_path,

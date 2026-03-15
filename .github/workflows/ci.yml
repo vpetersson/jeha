@@ -52,12 +52,10 @@ jobs:
     uses: ./.github/workflows/build.yml
 
   docker:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: build
     uses: ./.github/workflows/docker.yml
     with:
       tags: vpetersson/jeha:latest
-      version: latest
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PAT: ${{ secrets.DOCKER_PAT }}

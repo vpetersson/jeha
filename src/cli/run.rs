@@ -6,13 +6,13 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use crate::api;
 use crate::automation::AutomationEngine;
 use crate::circadian::CircadianEngine;
 use crate::config;
 use crate::config_sync::ConfigSync;
 use crate::event::EventBus;
 use crate::lights_out::LightsOutTask;
-use crate::mcp;
 use crate::mqtt::MqttHandle;
 use crate::mqtt::publish::Publisher;
 use crate::night_mode::NightModeScheduler;
@@ -23,7 +23,7 @@ pub async fn run_daemon(
     mqtt_host: Option<String>,
     mqtt_port: Option<u16>,
     mqtt_topic: Option<String>,
-    mcp_bind: Option<String>,
+    api_bind: Option<String>,
 ) -> Result<()> {
     // 1. Parse + validate config
     let mut loaded_config = config::load_config(config_path)?;
@@ -38,8 +38,8 @@ pub async fn run_daemon(
     if let Some(topic) = mqtt_topic {
         loaded_config.mqtt.base_topic = topic;
     }
-    if let Some(bind) = mcp_bind {
-        loaded_config.mcp.bind = bind;
+    if let Some(bind) = api_bind {
+        loaded_config.api.bind = bind;
     }
 
     let app_config = Arc::new(loaded_config);
@@ -157,27 +157,27 @@ pub async fn run_daemon(
     );
     tokio::spawn(night_scheduler.run());
 
-    // 7. Start MCP server
-    let mcp_state = shared_state.clone();
-    let mcp_state_tx = state_tx.clone();
-    let mcp_publisher = publisher.clone();
-    let mcp_bind = app_config.mcp.bind.clone();
-    let mcp_config = app_config.clone();
-    let mcp_event_bus = event_bus.clone();
-    let mcp_circadian = Some(circadian_for_automations);
+    // 7. Start API server
+    let api_state = shared_state.clone();
+    let api_state_tx = state_tx.clone();
+    let api_publisher = publisher.clone();
+    let api_bind_addr = app_config.api.bind.clone();
+    let api_config = app_config.clone();
+    let api_event_bus = event_bus.clone();
+    let api_circadian = Some(circadian_for_automations);
     tokio::spawn(async move {
-        if let Err(e) = mcp::start_mcp_server(
-            &mcp_bind,
-            mcp_state,
-            mcp_state_tx,
-            mcp_publisher,
-            mcp_config,
-            mcp_event_bus,
-            mcp_circadian,
+        if let Err(e) = api::start_api_server(
+            &api_bind_addr,
+            api_state,
+            api_state_tx,
+            api_publisher,
+            api_config,
+            api_event_bus,
+            api_circadian,
         )
         .await
         {
-            tracing::error!("MCP server error: {}", e);
+            tracing::error!("API server error: {}", e);
         }
     });
 

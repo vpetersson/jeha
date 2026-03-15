@@ -31,7 +31,7 @@ Home Assistant is great at being a general-purpose platform, but that generality
 - **No database.** All state derives from config + Z2M retained messages + current time. Restart at any point and converge in seconds.
 - **Never update lights that are off.** Circadian only pushes to rooms with lights ON.
 - **External change detection.** If someone activates a Z2M scene or uses a remote, jeha detects the state change and pauses circadian automatically.
-- **AI-native.** MCP server as the primary interface. No web UI. Talk to your lights through Claude.
+- **API-first.** REST API as the primary programmatic interface. No web UI. Control your lights from any HTTP client or integrate with AI assistants.
 
 ## Quick start
 
@@ -65,12 +65,45 @@ motion_sensor = "0x00158d0004abcdef"
 motion_timeout_secs = 120  # lights off 2 min after motion clears (default: 300)
 ```
 
-Override circadian per room:
+### General settings
+
+```toml
+[general]
+timezone = "UTC"                      # Timezone for schedules
+motion_timeout_secs = 300             # Default motion timeout (5 min)
+external_brightness_tolerance = 15    # Brightness drift before detecting external change
+external_color_temp_tolerance = 25    # Color temp drift (mired) before detecting external change
+external_override_secs = 1800         # How long to pause circadian after external change (30 min)
+remote_brightness_step = 25           # Brightness step for remote dim up/down
+```
+
+### Circadian defaults
+
+Global circadian settings control the daily light curve for all rooms. Defaults shown:
+
+```toml
+[circadian.defaults]
+wake_time = "06:00"           # Start of day — lights begin warming up
+sleep_time = "23:00"          # Bedtime — lights reach warmest/dimmest
+start_temp_k = 2700           # Color temp at wake (warm white)
+peak_temp_k = 4000            # Color temp at midday (cool white)
+end_temp_k = 2200             # Color temp at sleep (warmest)
+start_brightness = 150        # Brightness at wake
+peak_brightness = 254         # Brightness at midday (max)
+end_brightness = 77           # Brightness at sleep
+ramp_duration_mins = 180      # Minutes to ramp between points
+curve = "cosine"              # Interpolation: "cosine" or "linear"
+transition_secs = 30          # Z2M transition time per update
+update_interval_secs = 60     # How often to push new values
+```
+
+Override any of these per room:
 
 ```toml
 [rooms.kitchen.circadian]
 peak_temp_k = 5500
 peak_brightness = 254
+sleep_time = "22:00"
 ```
 
 Disable circadian for a room entirely:
@@ -85,14 +118,23 @@ jeha auto-discovers new Z2M groups with lights and appends them to the config fi
 
 ### Night mode
 
-Night mode sets lights to the warmest color and minimum brightness. Enable on a schedule:
+Night mode sets lights to the warmest color and minimum brightness. Global defaults:
+
+```toml
+[night_mode.defaults]
+color_temp_k = 2000           # Warmest available
+brightness = 2                # Near minimum
+motion_timeout_secs = 120     # Shorter timeout during night
+```
+
+Enable night mode on a schedule per room:
 
 ```toml
 [rooms.bedroom.night_mode]
 schedule = { after = "22:00", before = "06:30" }
 ```
 
-Override night mode light values per room:
+Override night mode values per room:
 
 ```toml
 [rooms.bedroom.night_mode]
@@ -185,6 +227,7 @@ lights_out = false
 ```
 jeha run [--config path]              # Start daemon
 jeha run --mqtt-host 10.0.0.5        # Override MQTT host
+jeha run --api-bind 0.0.0.0:8420     # Override API bind address
 jeha validate [--config path]         # Validate config
 jeha validate --check-devices         # Also verify against live Z2M
 jeha schema                           # Export JSON Schema
@@ -202,29 +245,31 @@ jeha migrate --dry-run                # Preview migration without writing
 | `JEHA_MQTT_HOST` | MQTT broker host |
 | `JEHA_MQTT_PORT` | MQTT broker port |
 | `JEHA_MQTT_TOPIC` | Z2M base topic (default: `zigbee2mqtt`) |
-| `JEHA_MCP_BIND` | MCP server bind address (default: `127.0.0.1:8420`) |
+| `JEHA_API_BIND` | API server bind address (default: `127.0.0.1:8420`) |
 
 CLI arguments take precedence over env vars, which take precedence over config file values.
 
-## MCP tools
+## REST API
 
-jeha exposes tools via MCP (Streamable HTTP on port 8420):
+jeha exposes a REST API on port 8420:
 
-| Tool | What it does |
-|---|---|
-| `get_rooms` | List all rooms with light state, circadian status, occupancy |
-| `get_room` | Detailed state for one room |
-| `light_on` | Turn on with optional brightness/color_temp/override TTL |
-| `light_off` | Turn off |
-| `set_scene` | Predefined scenes: bright, relax, movie, energize, nightlight |
-| `list_z2m_scenes` | List Z2M scenes available for a room |
-| `recall_z2m_scene` | Activate a Z2M scene (pauses circadian) |
-| `pause_circadian` | Stop circadian adjustments indefinitely |
-| `resume_circadian` | Resume circadian |
-| `snooze_circadian` | Pause circadian for N hours, auto-resume |
-| `set_night_mode` | Toggle night mode |
-| `get_circadian_status` | Current targets for all rooms |
-| `get_system_status` | MQTT/Z2M connection, uptime, device counts |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/rooms` | GET | List all rooms with light state, circadian status, occupancy |
+| `/api/rooms/{room_id}` | GET | Detailed state for one room |
+| `/api/rooms/{room_id}/light/on` | POST | Turn on with optional brightness/color_temp/override TTL |
+| `/api/rooms/{room_id}/light/off` | POST | Turn off |
+| `/api/rooms/{room_id}/scene` | POST | Predefined scenes: bright, relax, movie, energize, nightlight |
+| `/api/rooms/{room_id}/z2m-scenes` | GET | List Z2M scenes available for a room |
+| `/api/rooms/{room_id}/z2m-scenes/recall` | POST | Activate a Z2M scene (pauses circadian) |
+| `/api/rooms/{room_id}/circadian/pause` | POST | Stop circadian adjustments indefinitely |
+| `/api/rooms/{room_id}/circadian/resume` | POST | Resume circadian |
+| `/api/rooms/{room_id}/circadian/snooze` | POST | Pause circadian for N hours, auto-resume |
+| `/api/rooms/{room_id}/night-mode` | POST | Toggle night mode |
+| `/api/circadian` | GET | Current targets for all rooms |
+| `/api/system` | GET | MQTT/Z2M connection, uptime, device counts |
+
+Errors use HTTP status codes (400, 404, 500) with `{"error": "message"}` body.
 
 ## Circadian curve
 
@@ -243,23 +288,22 @@ Cosine interpolation between three points: wake (warm), midday (cool), sleep (wa
 
 ## Architecture
 
-```
-Claude (MCP client)
-    | Streamable HTTP (:8420)
-    v
-+---------------------------+
-|       jeha daemon         |
-|                           |
-|  Config -> State (ArcSwap)|
-|            |              |
-|  MQTT <-> Circadian       |
-|  Client   Automation      |
-|            |              |
-|        MCP Server         |
-+---------------------------+
-    | MQTT
-    v
-Zigbee2MQTT -> Zigbee devices
+```mermaid
+graph TD
+    Client["HTTP Client"]
+    Client -- "REST API (:8420)" --> API
+
+    subgraph jeha["jeha daemon"]
+        Config --> State["State (ArcSwap)"]
+        State --> Circadian["Circadian Engine"]
+        State --> Automation["Automation Engine"]
+        API["API Server"] --> State
+        MQTT["MQTT Client"] <--> Circadian
+        MQTT <--> Automation
+    end
+
+    MQTT -- MQTT --> Z2M["Zigbee2MQTT"]
+    Z2M --> Zigbee["Zigbee devices"]
 ```
 
 ## Building from source
@@ -268,7 +312,7 @@ Zigbee2MQTT -> Zigbee devices
 cargo build --release --target $(uname -m)-unknown-linux-musl
 ```
 
-Or with Docker:
+Or with Docker (no local Rust toolchain needed):
 
 ```sh
 docker build -t jeha .

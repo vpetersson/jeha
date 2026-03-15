@@ -31,7 +31,7 @@ Event-driven daemon with concurrent engines coordinating through shared state an
 - **EventBus** (`tokio::broadcast`) distributes events (MotionDetected, LightStateChanged, DeviceAvailabilityChanged, etc.) to all engines
 - **CircadianEngine** — periodic task that computes brightness/color_temp targets using cosine interpolation and pushes to lights via MQTT
 - **AutomationEngine** — reacts to motion/remote events, evaluates conditions, executes actions (lights on/off with delays)
-- **MCP Server** — custom HTTP/1.1 JSON-RPC server (hyper) on port 8420; 15 tools designed for AI consumption (no web UI)
+- **REST API Server** — axum-based REST API on port 8420; endpoints for room control, circadian management, scenes, and system status
 - **ConfigSync** — auto-discovers new Z2M groups and appends them to config file
 - **LightsOutTask** / **NightModeScheduler** — time-based tasks running on 30s check intervals
 
@@ -54,7 +54,7 @@ All engines run as independent `tokio::spawn` tasks. Failures in one engine don'
 - `src/event.rs` — `Event` enum and `EventBus`
 - `src/mqtt/z2m.rs` — Z2M message handlers (devices, groups, state, availability)
 - `src/mqtt/publish.rs` — `Publisher` for sending commands to Z2M
-- `src/mcp/tools.rs` — MCP tool definitions and implementations
+- `src/api/handlers.rs` — REST API handler functions and shared AppState
 - `src/schedule.rs` — `TimeOfDay`, `Schedule`, time matching logic
 
 ## Testing

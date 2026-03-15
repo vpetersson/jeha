@@ -18,8 +18,8 @@ pub struct AppConfig {
     pub night_mode: NightModeSection,
     #[serde(default)]
     pub lights_out: LightsOutConfig,
-    #[serde(default)]
-    pub mcp: McpConfig,
+    #[serde(default, alias = "mcp")]
+    pub api: ApiConfig,
     #[serde(default)]
     pub rooms: HashMap<String, RoomConfig>,
     #[serde(default)]
@@ -136,8 +136,8 @@ pub struct NightModeDefaults {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct McpConfig {
-    #[serde(default = "default_mcp_bind")]
+pub struct ApiConfig {
+    #[serde(default = "default_api_bind")]
     pub bind: String,
 }
 
@@ -153,7 +153,7 @@ fn default_lights_out_time() -> String {
     "01:00".to_string()
 }
 
-fn default_mcp_bind() -> String {
+fn default_api_bind() -> String {
     "127.0.0.1:8420".to_string()
 }
 
