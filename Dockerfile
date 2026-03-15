@@ -1,5 +1,10 @@
+ARG PREBUILT
+
 # --- Build from source (used by: docker build) ---
-FROM rust:alpine AS build
+# When PREBUILT=1, swap rust:alpine for alpine so BuildKit can resolve
+# metadata on arm/v6 and arm/v7 (rust:alpine only ships amd64+arm64).
+# The stage is unused when PREBUILT=1 so the contents don't matter.
+FROM ${PREBUILT:+alpine}${PREBUILT:-rust:alpine} AS build
 WORKDIR /build
 RUN apk add --no-cache musl-dev
 COPY . .
