@@ -312,6 +312,12 @@ graph TD
 cargo build --release --target $(uname -m)-unknown-linux-musl
 ```
 
+Or with Docker (no local Rust toolchain needed):
+
+```sh
+docker build -t jeha .
+```
+
 ## License
 
 GPL-3.0
