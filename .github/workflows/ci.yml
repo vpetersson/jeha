@@ -56,7 +56,6 @@ jobs:
     uses: ./.github/workflows/docker.yml
     with:
       tags: vpetersson/jeha:latest
-      version: latest
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PAT: ${{ secrets.DOCKER_PAT }}

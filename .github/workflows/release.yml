@@ -45,7 +45,6 @@ jobs:
     uses: ./.github/workflows/docker.yml
     with:
       tags: vpetersson/jeha:${{ github.ref_name }}
-      version: ${{ github.ref_name }}
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PAT: ${{ secrets.DOCKER_PAT }}

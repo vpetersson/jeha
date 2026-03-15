@@ -312,12 +312,6 @@ graph TD
 cargo build --release --target $(uname -m)-unknown-linux-musl
 ```
 
-Or with Docker:
-
-```sh
-docker build -t jeha .
-```
-
 ## License
 
 GPL-3.0

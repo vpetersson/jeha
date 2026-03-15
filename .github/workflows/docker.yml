@@ -6,9 +6,6 @@ on:
       tags:
         required: true
         type: string
-      version:
-        required: true
-        type: string
     secrets:
       DOCKER_USERNAME:
         required: true
@@ -46,6 +43,5 @@ jobs:
         with:
           context: .
           platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
-          build-args: VERSION=${{ inputs.version }}
           push: true
           tags: ${{ inputs.tags }}
