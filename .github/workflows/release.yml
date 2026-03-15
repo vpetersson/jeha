@@ -8,6 +8,11 @@ on:
 jobs:
   build:
     uses: ./.github/workflows/build.yml
+    with:
+      docker_tags: vpetersson/jeha:${{ github.ref_name }}
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
 
   release:
     name: Release
@@ -39,12 +44,3 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ github.ref_name }}" release/* --clobber --repo "${{ github.repository }}"
-
-  docker:
-    needs: build
-    uses: ./.github/workflows/docker.yml
-    with:
-      tags: vpetersson/jeha:${{ github.ref_name }}
-    secrets:
-      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-      DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
