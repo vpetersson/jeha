@@ -8,6 +8,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info};
 
 use crate::circadian::CircadianEngine;
+use crate::circadian::curve::parse_time_to_minutes;
 use crate::config::types::{AppConfig, RoomConfig};
 use crate::event::{Event, EventBus};
 use crate::mqtt::publish::Publisher;
@@ -203,6 +204,8 @@ pub struct NightModeScheduler {
     circadian_engine: Option<Arc<CircadianEngine>>,
     /// Rooms manually deactivated during current schedule window (suppress re-activation).
     suppressed: HashSet<String>,
+    /// Rooms that were before wake_time on previous tick (edge detection).
+    pre_wake: HashSet<String>,
 }
 
 impl NightModeScheduler {
@@ -224,17 +227,18 @@ impl NightModeScheduler {
             cancel,
             circadian_engine,
             suppressed: HashSet::new(),
+            pre_wake: HashSet::new(),
         }
     }
 
     pub async fn run(mut self) {
-        let has_schedules = self.config.rooms.values().any(|rc| {
+        let should_run = self.config.rooms.values().any(|rc| {
             let enm = rc.effective_night_mode(&self.config.night_mode.defaults);
-            enm.schedule.is_some()
+            enm.schedule.is_some() || rc.circadian_enabled
         });
 
-        if !has_schedules {
-            debug!("No rooms with night mode schedule configured");
+        if !should_run {
+            debug!("No rooms with night mode schedule or circadian configured");
             return;
         }
 
@@ -310,5 +314,106 @@ impl NightModeScheduler {
                 self.suppressed.remove(room_id);
             }
         }
+
+        // Wake-time deactivation: clear night mode when crossing wake_time
+        for (room_id, room_config) in &self.config.rooms {
+            if !room_config.circadian_enabled {
+                continue;
+            }
+
+            let defaults = room_config.effective_circadian(&self.config.circadian.defaults);
+            let wake_minutes = parse_time_to_minutes(&defaults.wake_time);
+            let current_minutes = now.minutes as u32;
+
+            let is_active = current
+                .rooms
+                .get(room_id)
+                .map(|rs| rs.night_mode_active)
+                .unwrap_or(false);
+
+            if should_wake_deactivate(
+                &mut self.pre_wake,
+                room_id,
+                wake_minutes,
+                current_minutes,
+                is_active,
+            ) {
+                info!(
+                    "Night mode wake-time deactivation: clearing '{}' at wake_time",
+                    room_id
+                );
+                self.suppressed.insert(room_id.clone());
+                let _ = deactivate_night_mode(
+                    room_id,
+                    room_config,
+                    &self.publisher,
+                    &self.state,
+                    &self.state_tx,
+                    &self.event_bus,
+                    &self.circadian_engine,
+                )
+                .await;
+            }
+        }
+    }
+}
+
+/// Pure function for wake-time edge detection.
+/// Returns true if night mode should be deactivated because we just crossed wake_time.
+fn should_wake_deactivate(
+    pre_wake: &mut HashSet<String>,
+    room_id: &str,
+    wake_minutes: u32,
+    current_minutes: u32,
+    night_mode_active: bool,
+) -> bool {
+    if current_minutes < wake_minutes {
+        // Before wake_time: record that we're in pre-wake state
+        pre_wake.insert(room_id.to_string());
+        false
+    } else if pre_wake.remove(room_id) && night_mode_active {
+        // Just crossed wake_time and night mode is on: deactivate
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wake_deactivate_before_wake_time() {
+        let mut pre_wake = HashSet::new();
+        let result = should_wake_deactivate(&mut pre_wake, "bedroom", 360, 300, true);
+        assert!(!result);
+        assert!(pre_wake.contains("bedroom"));
+    }
+
+    #[test]
+    fn test_wake_deactivate_at_wake_time_with_night_mode() {
+        let mut pre_wake = HashSet::new();
+        pre_wake.insert("bedroom".to_string());
+        let result = should_wake_deactivate(&mut pre_wake, "bedroom", 360, 360, true);
+        assert!(result);
+        assert!(!pre_wake.contains("bedroom"));
+    }
+
+    #[test]
+    fn test_wake_deactivate_at_wake_time_without_night_mode() {
+        let mut pre_wake = HashSet::new();
+        pre_wake.insert("bedroom".to_string());
+        let result = should_wake_deactivate(&mut pre_wake, "bedroom", 360, 360, false);
+        assert!(!result);
+        assert!(!pre_wake.contains("bedroom"));
+    }
+
+    #[test]
+    fn test_wake_deactivate_after_wake_without_pre_wake() {
+        let mut pre_wake = HashSet::new();
+        // Night mode activated during the day — no pre_wake entry
+        let result = should_wake_deactivate(&mut pre_wake, "bedroom", 360, 400, true);
+        assert!(!result);
     }
 }
