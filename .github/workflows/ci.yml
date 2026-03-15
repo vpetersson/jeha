@@ -50,12 +50,8 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
     needs: [fmt, clippy, test]
     uses: ./.github/workflows/build.yml
-
-  docker:
-    needs: build
-    uses: ./.github/workflows/docker.yml
     with:
-      tags: vpetersson/jeha:latest
+      docker_tags: vpetersson/jeha:latest
     secrets:
       DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
       DOCKER_PAT: ${{ secrets.DOCKER_PAT }}
