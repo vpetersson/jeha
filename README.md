@@ -65,12 +65,45 @@ motion_sensor = "0x00158d0004abcdef"
 motion_timeout_secs = 120  # lights off 2 min after motion clears (default: 300)
 ```
 
-Override circadian per room:
+### General settings
+
+```toml
+[general]
+timezone = "UTC"                      # Timezone for schedules
+motion_timeout_secs = 300             # Default motion timeout (5 min)
+external_brightness_tolerance = 15    # Brightness drift before detecting external change
+external_color_temp_tolerance = 25    # Color temp drift (mired) before detecting external change
+external_override_secs = 1800         # How long to pause circadian after external change (30 min)
+remote_brightness_step = 25           # Brightness step for remote dim up/down
+```
+
+### Circadian defaults
+
+Global circadian settings control the daily light curve for all rooms. Defaults shown:
+
+```toml
+[circadian.defaults]
+wake_time = "06:00"           # Start of day — lights begin warming up
+sleep_time = "23:00"          # Bedtime — lights reach warmest/dimmest
+start_temp_k = 2700           # Color temp at wake (warm white)
+peak_temp_k = 4000            # Color temp at midday (cool white)
+end_temp_k = 2200             # Color temp at sleep (warmest)
+start_brightness = 150        # Brightness at wake
+peak_brightness = 254         # Brightness at midday (max)
+end_brightness = 77           # Brightness at sleep
+ramp_duration_mins = 180      # Minutes to ramp between points
+curve = "cosine"              # Interpolation: "cosine" or "linear"
+transition_secs = 30          # Z2M transition time per update
+update_interval_secs = 60     # How often to push new values
+```
+
+Override any of these per room:
 
 ```toml
 [rooms.kitchen.circadian]
 peak_temp_k = 5500
 peak_brightness = 254
+sleep_time = "22:00"
 ```
 
 Disable circadian for a room entirely:
@@ -85,14 +118,23 @@ jeha auto-discovers new Z2M groups with lights and appends them to the config fi
 
 ### Night mode
 
-Night mode sets lights to the warmest color and minimum brightness. Enable on a schedule:
+Night mode sets lights to the warmest color and minimum brightness. Global defaults:
+
+```toml
+[night_mode.defaults]
+color_temp_k = 2000           # Warmest available
+brightness = 2                # Near minimum
+motion_timeout_secs = 120     # Shorter timeout during night
+```
+
+Enable night mode on a schedule per room:
 
 ```toml
 [rooms.bedroom.night_mode]
 schedule = { after = "22:00", before = "06:30" }
 ```
 
-Override night mode light values per room:
+Override night mode values per room:
 
 ```toml
 [rooms.bedroom.night_mode]
