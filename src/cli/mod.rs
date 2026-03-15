@@ -32,9 +32,9 @@ pub enum Commands {
         /// MQTT base topic (overrides config file)
         #[arg(long, env = "JEHA_MQTT_TOPIC")]
         mqtt_topic: Option<String>,
-        /// MCP server bind address (overrides config file)
-        #[arg(long, env = "JEHA_MCP_BIND")]
-        mcp_bind: Option<String>,
+        /// API server bind address (overrides config file)
+        #[arg(long, alias = "mcp-bind", env = "JEHA_API_BIND")]
+        api_bind: Option<String>,
     },
     /// Validate configuration
     Validate {

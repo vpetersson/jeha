@@ -66,7 +66,7 @@ color_temp_k = 2200
 brightness = 20
 motion_timeout_secs = 120
 
-[mcp]
+[api]
 bind = "127.0.0.1:8420"
 
 [rooms.kitchen]

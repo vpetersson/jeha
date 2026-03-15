@@ -31,7 +31,7 @@ Home Assistant is great at being a general-purpose platform, but that generality
 - **No database.** All state derives from config + Z2M retained messages + current time. Restart at any point and converge in seconds.
 - **Never update lights that are off.** Circadian only pushes to rooms with lights ON.
 - **External change detection.** If someone activates a Z2M scene or uses a remote, jeha detects the state change and pauses circadian automatically.
-- **AI-native.** MCP server as the primary interface. No web UI. Talk to your lights through Claude.
+- **API-first.** REST API as the primary programmatic interface. No web UI. Control your lights from any HTTP client or integrate with AI assistants.
 
 ## Quick start
 
@@ -185,6 +185,7 @@ lights_out = false
 ```
 jeha run [--config path]              # Start daemon
 jeha run --mqtt-host 10.0.0.5        # Override MQTT host
+jeha run --api-bind 0.0.0.0:8420     # Override API bind address
 jeha validate [--config path]         # Validate config
 jeha validate --check-devices         # Also verify against live Z2M
 jeha schema                           # Export JSON Schema
@@ -202,29 +203,31 @@ jeha migrate --dry-run                # Preview migration without writing
 | `JEHA_MQTT_HOST` | MQTT broker host |
 | `JEHA_MQTT_PORT` | MQTT broker port |
 | `JEHA_MQTT_TOPIC` | Z2M base topic (default: `zigbee2mqtt`) |
-| `JEHA_MCP_BIND` | MCP server bind address (default: `127.0.0.1:8420`) |
+| `JEHA_API_BIND` | API server bind address (default: `127.0.0.1:8420`) |
 
 CLI arguments take precedence over env vars, which take precedence over config file values.
 
-## MCP tools
+## REST API
 
-jeha exposes tools via MCP (Streamable HTTP on port 8420):
+jeha exposes a REST API on port 8420:
 
-| Tool | What it does |
-|---|---|
-| `get_rooms` | List all rooms with light state, circadian status, occupancy |
-| `get_room` | Detailed state for one room |
-| `light_on` | Turn on with optional brightness/color_temp/override TTL |
-| `light_off` | Turn off |
-| `set_scene` | Predefined scenes: bright, relax, movie, energize, nightlight |
-| `list_z2m_scenes` | List Z2M scenes available for a room |
-| `recall_z2m_scene` | Activate a Z2M scene (pauses circadian) |
-| `pause_circadian` | Stop circadian adjustments indefinitely |
-| `resume_circadian` | Resume circadian |
-| `snooze_circadian` | Pause circadian for N hours, auto-resume |
-| `set_night_mode` | Toggle night mode |
-| `get_circadian_status` | Current targets for all rooms |
-| `get_system_status` | MQTT/Z2M connection, uptime, device counts |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/rooms` | GET | List all rooms with light state, circadian status, occupancy |
+| `/api/rooms/{room_id}` | GET | Detailed state for one room |
+| `/api/rooms/{room_id}/light/on` | POST | Turn on with optional brightness/color_temp/override TTL |
+| `/api/rooms/{room_id}/light/off` | POST | Turn off |
+| `/api/rooms/{room_id}/scene` | POST | Predefined scenes: bright, relax, movie, energize, nightlight |
+| `/api/rooms/{room_id}/z2m-scenes` | GET | List Z2M scenes available for a room |
+| `/api/rooms/{room_id}/z2m-scenes/recall` | POST | Activate a Z2M scene (pauses circadian) |
+| `/api/rooms/{room_id}/circadian/pause` | POST | Stop circadian adjustments indefinitely |
+| `/api/rooms/{room_id}/circadian/resume` | POST | Resume circadian |
+| `/api/rooms/{room_id}/circadian/snooze` | POST | Pause circadian for N hours, auto-resume |
+| `/api/rooms/{room_id}/night-mode` | POST | Toggle night mode |
+| `/api/circadian` | GET | Current targets for all rooms |
+| `/api/system` | GET | MQTT/Z2M connection, uptime, device counts |
+
+Errors use HTTP status codes (400, 404, 500) with `{"error": "message"}` body.
 
 ## Circadian curve
 
@@ -243,23 +246,22 @@ Cosine interpolation between three points: wake (warm), midday (cool), sleep (wa
 
 ## Architecture
 
-```
-Claude (MCP client)
-    | Streamable HTTP (:8420)
-    v
-+---------------------------+
-|       jeha daemon         |
-|                           |
-|  Config -> State (ArcSwap)|
-|            |              |
-|  MQTT <-> Circadian       |
-|  Client   Automation      |
-|            |              |
-|        MCP Server         |
-+---------------------------+
-    | MQTT
-    v
-Zigbee2MQTT -> Zigbee devices
+```mermaid
+graph TD
+    Client["HTTP Client"]
+    Client -- "REST API (:8420)" --> API
+
+    subgraph jeha["jeha daemon"]
+        Config --> State["State (ArcSwap)"]
+        State --> Circadian["Circadian Engine"]
+        State --> Automation["Automation Engine"]
+        API["API Server"] --> State
+        MQTT["MQTT Client"] <--> Circadian
+        MQTT <--> Automation
+    end
+
+    MQTT -- MQTT --> Z2M["Zigbee2MQTT"]
+    Z2M --> Zigbee["Zigbee devices"]
 ```
 
 ## Building from source

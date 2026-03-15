@@ -91,7 +91,7 @@ pub struct RoomState {
     /// When set, manual override expires and circadian resumes after this instant.
     #[serde(skip)]
     pub manual_override_until: Option<Instant>,
-    /// When jeha last pushed light state to this room (circadian or MCP command).
+    /// When jeha last pushed light state to this room (circadian or API command).
     /// Used to distinguish jeha's own echoes from external changes.
     #[serde(skip)]
     pub last_jeha_push: Option<Instant>,
