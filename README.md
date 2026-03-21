@@ -275,6 +275,52 @@ Errors use HTTP status codes (400, 404, 500) with `{"error": "message"}` body.
 
 Cosine interpolation between three points: wake (warm), midday (cool), sleep (warmest). 30-second transitions between updates make changes imperceptible. Configurable per room. Can be disabled per room with `circadian_enabled = false`.
 
+## Remote control bindings
+
+jeha maps Z2M remote actions to built-in behaviors automatically. No configuration needed — just add the remote's IEEE address to a room's `remotes` list. Tested with IKEA (STYRBAR, TRADFRI, RODRET, ON/OFF switch), Philips Hue (Dimmer v1/v2, Smart button), Aqara Mini, Sonoff (SNZB-01), and Tuya (TS004F, knobs).
+
+```mermaid
+graph LR
+    subgraph "Z2M Action"
+        Toggle["toggle / single"]
+        On["on / on_press"]
+        Off["off / off_press"]
+        BrUp["brightness_up_click\nbrightness_step_up\nup_press"]
+        BrDown["brightness_down_click\nbrightness_step_down\ndown_press"]
+        BrUpHold["brightness_move_up\nup_hold"]
+        BrDownHold["brightness_move_down\ndown_hold"]
+        BrStop["brightness_stop\n*_release"]
+        Night["arrow_right_click\non_hold / hold / long"]
+        Day["arrow_left_click\noff_hold"]
+    end
+
+    subgraph "jeha Action"
+        ToggleA["Toggle lights\n(circadian-aware)"]
+        OnA["Lights on\n(circadian)"]
+        OffA["Lights off"]
+        StepUpA["Brightness +step\n(pauses circadian)"]
+        StepDownA["Brightness -step\n(pauses circadian)"]
+        HoldUpA["Continuous dim up\n(300ms interval)"]
+        HoldDownA["Continuous dim down\n(300ms interval)"]
+        StopA["Stop dimming"]
+        NightA["Activate\nnight mode"]
+        DayA["Deactivate\nnight mode"]
+    end
+
+    Toggle --> ToggleA
+    On --> OnA
+    Off --> OffA
+    BrUp --> StepUpA
+    BrDown --> StepDownA
+    BrUpHold --> HoldUpA
+    BrDownHold --> HoldDownA
+    BrStop --> StopA
+    Night --> NightA
+    Day --> DayA
+```
+
+Multi-button devices (IKEA SOMRIG, Aqara Opple, Tuya TS0042+) use numbered action prefixes (e.g. `1_single`, `button_2_hold`) which are not auto-mapped — use custom automations for those.
+
 ## Resilience
 
 | Scenario | Behavior |
