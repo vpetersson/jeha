@@ -444,24 +444,16 @@ fn find_room_for_device(
         .map(|d| d.ieee_address.as_str());
 
     for (room_id, room_config) in &config.rooms {
-        // Check direct light match
-        if let Some(ieee) = ieee
-            && room_config.lights.iter().any(|l| l == ieee)
-        {
-            return Some(room_id.clone());
-        }
-
-        // Check Z2M group membership
         if let Some(ref group_name) = room_config.z2m_group {
-            // Check if this IS the group topic (e.g., "Living Room")
+            // Room uses a Z2M group: only match the group topic to avoid
+            // processing duplicate state from individual device topics.
             if device_name == group_name {
                 return Some(room_id.clone());
             }
-
-            // Check if device is a member of this group
+        } else {
+            // No group configured: match individual device by IEEE
             if let Some(ieee) = ieee
-                && let Some(group) = system_state.group_map.get(group_name)
-                && group.members.iter().any(|m| m.ieee_address == ieee)
+                && room_config.lights.iter().any(|l| l == ieee)
             {
                 return Some(room_id.clone());
             }

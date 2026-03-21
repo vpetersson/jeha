@@ -496,24 +496,38 @@ impl AutomationEngine {
                 }
 
                 RemoteActionType::On => {
-                    info!("Remote: turning on lights in '{}' (circadian)", room_id);
-                    let on = ActionConfig::LightsOn {
-                        use_circadian: true,
-                        brightness: None,
-                        color_temp_k: None,
-                        transition: Some(1),
-                    };
-                    if let Err(e) = action::execute_action(
-                        &on,
-                        room_id,
-                        room_config,
-                        &self.publisher,
-                        &self.state_tx,
-                        &self.circadian_engine,
-                    )
-                    .await
-                    {
-                        error!("Remote: failed to turn on '{}': {}", room_id, e);
+                    let current = self.state.load();
+                    let lights_on = current
+                        .rooms
+                        .get(room_id)
+                        .map(|rs| rs.lights_on)
+                        .unwrap_or(false);
+
+                    if lights_on {
+                        debug!(
+                            "Remote: lights already on in '{}', ignoring ON action",
+                            room_id
+                        );
+                    } else {
+                        info!("Remote: turning on lights in '{}' (circadian)", room_id);
+                        let on = ActionConfig::LightsOn {
+                            use_circadian: true,
+                            brightness: None,
+                            color_temp_k: None,
+                            transition: Some(1),
+                        };
+                        if let Err(e) = action::execute_action(
+                            &on,
+                            room_id,
+                            room_config,
+                            &self.publisher,
+                            &self.state_tx,
+                            &self.circadian_engine,
+                        )
+                        .await
+                        {
+                            error!("Remote: failed to turn on '{}': {}", room_id, e);
+                        }
                     }
                 }
 
