@@ -46,22 +46,11 @@ pub async fn execute_action(
 
             let trans = transition.or(Some(3));
 
-            if let Some(ref group) = room_config.z2m_group {
-                publisher
-                    .turn_on_group(group, Some(bright), ct_mired, trans)
-                    .await?;
-            } else {
-                for ieee in &room_config.lights {
-                    publisher
-                        .turn_on_ieee(ieee, Some(bright), ct_mired, trans)
-                        .await?;
-                }
-            }
-
+            // Update state BEFORE MQTT publish so other tasks see lights_on=true immediately
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
-                    update: RoomStateUpdate::LightsOn {
+                    update: RoomStateUpdate::LightsOnWithPush {
                         brightness: Some(bright),
                         color_temp_mired: ct_mired,
                         source,
@@ -69,16 +58,13 @@ pub async fn execute_action(
                 })
                 .await;
 
-            // Mark as jeha push so Z2M echoes don't trigger external change detection
-            let _ = state_tx
-                .send(StateCommand::UpdateRoomState {
-                    room_id: room_id.to_string(),
-                    update: RoomStateUpdate::JehaPush {
-                        brightness: Some(bright),
-                        color_temp_mired: ct_mired,
-                    },
-                })
-                .await;
+            if let Some(ref group) = room_config.z2m_group {
+                publisher
+                    .turn_on_group(group, Some(bright), ct_mired, trans)
+                    .await?;
+            } else {
+                publish_on_all(room_config, publisher, Some(bright), ct_mired, trans).await?;
+            }
 
             debug!("Lights ON in room '{}': brightness={}", room_id, bright);
         }
@@ -97,20 +83,19 @@ pub async fn execute_action(
 
             let trans = transition.or(Some(3));
 
-            if let Some(ref group) = room_config.z2m_group {
-                publisher.turn_off_group(group, trans).await?;
-            } else {
-                for ieee in &room_config.lights {
-                    publisher.turn_off_ieee(ieee, trans).await?;
-                }
-            }
-
+            // Update state BEFORE MQTT publish
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
                     update: RoomStateUpdate::LightsOff,
                 })
                 .await;
+
+            if let Some(ref group) = room_config.z2m_group {
+                publisher.turn_off_group(group, trans).await?;
+            } else {
+                publish_off_all(room_config, publisher, trans).await?;
+            }
 
             debug!("Lights OFF in room '{}'", room_id);
         }
@@ -120,22 +105,12 @@ pub async fn execute_action(
             transition,
         } => {
             let trans = transition.or(Some(3));
-            if let Some(ref group) = room_config.z2m_group {
-                publisher
-                    .turn_on_group(group, Some(*brightness), None, trans)
-                    .await?;
-            } else {
-                for ieee in &room_config.lights {
-                    publisher
-                        .turn_on_ieee(ieee, Some(*brightness), None, trans)
-                        .await?;
-                }
-            }
 
+            // Update state BEFORE MQTT publish
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
-                    update: RoomStateUpdate::LightsOn {
+                    update: RoomStateUpdate::LightsOnWithPush {
                         brightness: Some(*brightness),
                         color_temp_mired: None,
                         source: UpdateSource::Manual,
@@ -143,15 +118,13 @@ pub async fn execute_action(
                 })
                 .await;
 
-            let _ = state_tx
-                .send(StateCommand::UpdateRoomState {
-                    room_id: room_id.to_string(),
-                    update: RoomStateUpdate::JehaPush {
-                        brightness: Some(*brightness),
-                        color_temp_mired: None,
-                    },
-                })
-                .await;
+            if let Some(ref group) = room_config.z2m_group {
+                publisher
+                    .turn_on_group(group, Some(*brightness), None, trans)
+                    .await?;
+            } else {
+                publish_on_all(room_config, publisher, Some(*brightness), None, trans).await?;
+            }
 
             debug!("Set brightness {} in room '{}'", brightness, room_id);
         }
@@ -162,22 +135,12 @@ pub async fn execute_action(
         } => {
             let ct_mired = (1_000_000u32 / *color_temp_k as u32) as u16;
             let trans = transition.or(Some(3));
-            if let Some(ref group) = room_config.z2m_group {
-                publisher
-                    .turn_on_group(group, None, Some(ct_mired), trans)
-                    .await?;
-            } else {
-                for ieee in &room_config.lights {
-                    publisher
-                        .turn_on_ieee(ieee, None, Some(ct_mired), trans)
-                        .await?;
-                }
-            }
 
+            // Update state BEFORE MQTT publish
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
-                    update: RoomStateUpdate::LightsOn {
+                    update: RoomStateUpdate::LightsOnWithPush {
                         brightness: None,
                         color_temp_mired: Some(ct_mired),
                         source: UpdateSource::Manual,
@@ -185,15 +148,13 @@ pub async fn execute_action(
                 })
                 .await;
 
-            let _ = state_tx
-                .send(StateCommand::UpdateRoomState {
-                    room_id: room_id.to_string(),
-                    update: RoomStateUpdate::JehaPush {
-                        brightness: None,
-                        color_temp_mired: Some(ct_mired),
-                    },
-                })
-                .await;
+            if let Some(ref group) = room_config.z2m_group {
+                publisher
+                    .turn_on_group(group, None, Some(ct_mired), trans)
+                    .await?;
+            } else {
+                publish_on_all(room_config, publisher, None, Some(ct_mired), trans).await?;
+            }
 
             debug!(
                 "Set color temp {}K ({}mired) in room '{}'",
@@ -202,5 +163,48 @@ pub async fn execute_action(
         }
     }
 
+    Ok(())
+}
+
+/// Publish to all individual lights in a room concurrently using JoinSet.
+/// Each closure receives a cloned IEEE address and publisher Arc.
+async fn publish_on_all(
+    room_config: &RoomConfig,
+    publisher: &Arc<Publisher>,
+    brightness: Option<u8>,
+    color_temp_mired: Option<u16>,
+    transition: Option<u32>,
+) -> Result<()> {
+    let mut set = tokio::task::JoinSet::new();
+    for ieee in &room_config.lights {
+        let pub_clone = publisher.clone();
+        let ieee_clone = ieee.clone();
+        set.spawn(async move {
+            pub_clone
+                .turn_on_ieee(&ieee_clone, brightness, color_temp_mired, transition)
+                .await
+        });
+    }
+    while let Some(result) = set.join_next().await {
+        result??;
+    }
+    Ok(())
+}
+
+/// Turn off all individual lights in a room concurrently.
+async fn publish_off_all(
+    room_config: &RoomConfig,
+    publisher: &Arc<Publisher>,
+    transition: Option<u32>,
+) -> Result<()> {
+    let mut set = tokio::task::JoinSet::new();
+    for ieee in &room_config.lights {
+        let pub_clone = publisher.clone();
+        let ieee_clone = ieee.clone();
+        set.spawn(async move { pub_clone.turn_off_ieee(&ieee_clone, transition).await });
+    }
+    while let Some(result) = set.join_next().await {
+        result??;
+    }
     Ok(())
 }

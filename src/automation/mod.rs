@@ -279,21 +279,28 @@ impl AutomationEngine {
                                 transition: None,
                             }
                         };
-                        if let Err(e) = action::execute_action(
-                            &action,
-                            &room_id,
-                            &room_config,
-                            &self.publisher,
-                            &self.state_tx,
-                            &self.circadian_engine,
-                        )
-                        .await
-                        {
-                            error!(
-                                "Built-in motion: failed to turn on lights in '{}': {}",
-                                room_id, e
-                            );
-                        }
+                        let publisher = self.publisher.clone();
+                        let state_tx = self.state_tx.clone();
+                        let circadian = self.circadian_engine.clone();
+                        let room_id_clone = room_id.clone();
+                        let room_config_clone = room_config.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = action::execute_action(
+                                &action,
+                                &room_id_clone,
+                                &room_config_clone,
+                                &publisher,
+                                &state_tx,
+                                &circadian,
+                            )
+                            .await
+                            {
+                                error!(
+                                    "Built-in motion: failed to turn on lights in '{}': {}",
+                                    room_id_clone, e
+                                );
+                            }
+                        });
                     } else {
                         debug!(
                             "Built-in motion: lights already on in '{}', timer reset only",
@@ -454,45 +461,40 @@ impl AutomationEngine {
                         .map(|rs| rs.lights_on)
                         .unwrap_or(false);
 
-                    if lights_on {
+                    let action_cfg = if lights_on {
                         info!("Remote: toggling lights off in '{}'", room_id);
-                        let off = ActionConfig::LightsOff {
+                        ActionConfig::LightsOff {
                             delay_secs: 0,
                             transition: Some(1),
-                        };
-                        if let Err(e) = action::execute_action(
-                            &off,
-                            room_id,
-                            room_config,
-                            &self.publisher,
-                            &self.state_tx,
-                            &self.circadian_engine,
-                        )
-                        .await
-                        {
-                            error!("Remote: failed to turn off '{}': {}", room_id, e);
                         }
                     } else {
                         info!("Remote: toggling lights on in '{}' (circadian)", room_id);
-                        let on = ActionConfig::LightsOn {
+                        ActionConfig::LightsOn {
                             use_circadian: true,
                             brightness: None,
                             color_temp_k: None,
                             transition: Some(1),
-                        };
+                        }
+                    };
+                    let publisher = self.publisher.clone();
+                    let state_tx = self.state_tx.clone();
+                    let circadian = self.circadian_engine.clone();
+                    let rid = room_id.clone();
+                    let rc = room_config.clone();
+                    tokio::spawn(async move {
                         if let Err(e) = action::execute_action(
-                            &on,
-                            room_id,
-                            room_config,
-                            &self.publisher,
-                            &self.state_tx,
-                            &self.circadian_engine,
+                            &action_cfg,
+                            &rid,
+                            &rc,
+                            &publisher,
+                            &state_tx,
+                            &circadian,
                         )
                         .await
                         {
-                            error!("Remote: failed to turn on '{}': {}", room_id, e);
+                            error!("Remote: failed to execute toggle in '{}': {}", rid, e);
                         }
-                    }
+                    });
                 }
 
                 RemoteActionType::On => {
@@ -516,18 +518,20 @@ impl AutomationEngine {
                             color_temp_k: None,
                             transition: Some(1),
                         };
-                        if let Err(e) = action::execute_action(
-                            &on,
-                            room_id,
-                            room_config,
-                            &self.publisher,
-                            &self.state_tx,
-                            &self.circadian_engine,
-                        )
-                        .await
-                        {
-                            error!("Remote: failed to turn on '{}': {}", room_id, e);
-                        }
+                        let publisher = self.publisher.clone();
+                        let state_tx = self.state_tx.clone();
+                        let circadian = self.circadian_engine.clone();
+                        let rid = room_id.clone();
+                        let rc = room_config.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = action::execute_action(
+                                &on, &rid, &rc, &publisher, &state_tx, &circadian,
+                            )
+                            .await
+                            {
+                                error!("Remote: failed to turn on '{}': {}", rid, e);
+                            }
+                        });
                     }
                 }
 
@@ -537,18 +541,20 @@ impl AutomationEngine {
                         delay_secs: 0,
                         transition: Some(1),
                     };
-                    if let Err(e) = action::execute_action(
-                        &off,
-                        room_id,
-                        room_config,
-                        &self.publisher,
-                        &self.state_tx,
-                        &self.circadian_engine,
-                    )
-                    .await
-                    {
-                        error!("Remote: failed to turn off '{}': {}", room_id, e);
-                    }
+                    let publisher = self.publisher.clone();
+                    let state_tx = self.state_tx.clone();
+                    let circadian = self.circadian_engine.clone();
+                    let rid = room_id.clone();
+                    let rc = room_config.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = action::execute_action(
+                            &off, &rid, &rc, &publisher, &state_tx, &circadian,
+                        )
+                        .await
+                        {
+                            error!("Remote: failed to turn off '{}': {}", rid, e);
+                        }
+                    });
                 }
 
                 RemoteActionType::BrightnessUpStep => {
@@ -569,42 +575,45 @@ impl AutomationEngine {
 
                 RemoteActionType::NightMode => {
                     info!("Remote: enabling night mode in '{}'", room_id);
-                    if let Err(e) = crate::night_mode::activate_night_mode(
-                        room_id,
-                        room_config,
-                        &self.config,
-                        &self.publisher,
-                        &self.state,
-                        &self.state_tx,
-                        &self.event_bus,
-                    )
-                    .await
-                    {
-                        error!(
-                            "Remote: failed to activate night mode in '{}': {}",
-                            room_id, e
-                        );
-                    }
+                    let rid = room_id.clone();
+                    let rc = room_config.clone();
+                    let config = self.config.clone();
+                    let publisher = self.publisher.clone();
+                    let state = self.state.clone();
+                    let state_tx = self.state_tx.clone();
+                    let event_bus = self.event_bus.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = crate::night_mode::activate_night_mode(
+                            &rid, &rc, &config, &publisher, &state, &state_tx, &event_bus,
+                        )
+                        .await
+                        {
+                            error!("Remote: failed to activate night mode in '{}': {}", rid, e);
+                        }
+                    });
                 }
 
                 RemoteActionType::DayMode => {
                     info!("Remote: resuming day mode in '{}'", room_id);
-                    if let Err(e) = crate::night_mode::deactivate_night_mode(
-                        room_id,
-                        room_config,
-                        &self.publisher,
-                        &self.state,
-                        &self.state_tx,
-                        &self.event_bus,
-                        &self.circadian_engine,
-                    )
-                    .await
-                    {
-                        error!(
-                            "Remote: failed to deactivate night mode in '{}': {}",
-                            room_id, e
-                        );
-                    }
+                    let rid = room_id.clone();
+                    let rc = room_config.clone();
+                    let publisher = self.publisher.clone();
+                    let state = self.state.clone();
+                    let state_tx = self.state_tx.clone();
+                    let event_bus = self.event_bus.clone();
+                    let circadian = self.circadian_engine.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = crate::night_mode::deactivate_night_mode(
+                            &rid, &rc, &publisher, &state, &state_tx, &event_bus, &circadian,
+                        )
+                        .await
+                        {
+                            error!(
+                                "Remote: failed to deactivate night mode in '{}': {}",
+                                rid, e
+                            );
+                        }
+                    });
                 }
 
                 RemoteActionType::BrightnessStop => {
