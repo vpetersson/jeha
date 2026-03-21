@@ -193,6 +193,14 @@ pub enum RoomStateUpdate {
         brightness: Option<u8>,
         color_temp_mired: Option<u16>,
     },
+    /// Combined LightsOn + JehaPush in a single state mutation.
+    /// Avoids two separate SystemState clones and prevents a race where
+    /// a Z2M echo arrives between the two updates.
+    LightsOnWithPush {
+        brightness: Option<u8>,
+        color_temp_mired: Option<u16>,
+        source: UpdateSource,
+    },
     ExternalChange {
         ttl_secs: u64,
     },
@@ -266,6 +274,23 @@ impl StateManager {
                             if color_temp_mired.is_some() {
                                 room.intended_color_temp_mired = color_temp_mired;
                             }
+                        }
+                        RoomStateUpdate::LightsOnWithPush {
+                            brightness,
+                            color_temp_mired,
+                            source,
+                        } => {
+                            room.lights_on = true;
+                            if brightness.is_some() {
+                                room.current_brightness = brightness;
+                                room.intended_brightness = brightness;
+                            }
+                            if color_temp_mired.is_some() {
+                                room.current_color_temp_mired = color_temp_mired;
+                                room.intended_color_temp_mired = color_temp_mired;
+                            }
+                            room.update_source = source;
+                            room.last_jeha_push = Some(Instant::now());
                         }
                         RoomStateUpdate::ExternalChange { ttl_secs } => {
                             room.update_source = UpdateSource::Manual;

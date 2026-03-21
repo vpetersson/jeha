@@ -9,8 +9,6 @@ use crate::calibration;
 use crate::config::types::AppConfig;
 use crate::state::SharedState;
 
-use super::z2m;
-
 pub struct Publisher {
     client: AsyncClient,
     base_topic: String,
@@ -48,14 +46,25 @@ impl Publisher {
     }
 
     pub async fn set_light_ieee(&self, ieee: &str, payload: &serde_json::Value) -> Result<()> {
-        let topic = z2m::resolve_topic(&self.state, ieee, &self.base_topic);
-        match topic {
-            Some(topic) => {
-                let set_topic = format!("{}/set", topic);
+        let current = self.state.load();
+        self.publish_to_ieee(ieee, payload, &current).await
+    }
+
+    /// Publish to a device by IEEE using a pre-loaded state snapshot.
+    /// Avoids redundant ArcSwap loads when the caller already holds a snapshot.
+    async fn publish_to_ieee(
+        &self,
+        ieee: &str,
+        payload: &serde_json::Value,
+        current: &crate::state::SystemState,
+    ) -> Result<()> {
+        match current.device_map.get(ieee) {
+            Some(device) => {
+                let topic = format!("{}/{}/set", self.base_topic, device.friendly_name);
                 let data = serde_json::to_vec(payload)?;
-                debug!("Publishing to {}: {}", set_topic, payload);
+                debug!("Publishing to {}: {}", topic, payload);
                 self.client
-                    .publish(&set_topic, QoS::AtLeastOnce, false, data)
+                    .publish(&topic, QoS::AtLeastOnce, false, data)
                     .await?;
                 Ok(())
             }
@@ -129,7 +138,7 @@ impl Publisher {
         if let Some(t) = transition {
             payload["transition"] = json!(t);
         }
-        self.set_light_ieee(ieee, &payload).await
+        self.publish_to_ieee(ieee, &payload, &current).await
     }
 
     pub async fn turn_off_ieee(&self, ieee: &str, transition: Option<u32>) -> Result<()> {
@@ -162,7 +171,7 @@ impl Publisher {
             let calibrated_ct = cal.apply_color_temp(ct, device_info);
             payload["color_temp"] = json!(calibrated_ct);
         }
-        self.set_light_ieee(ieee, &payload).await
+        self.publish_to_ieee(ieee, &payload, &current).await
     }
 
     pub async fn push_circadian_group(
