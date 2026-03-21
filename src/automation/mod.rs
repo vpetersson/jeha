@@ -603,15 +603,19 @@ impl AutomationEngine {
         }
     }
 
-    /// Single-step brightness change (click).
+    /// Single-step brightness change (click). No-op when lights are off.
     async fn step_brightness(
         &self,
         room_id: &str,
         room_config: &crate::config::types::RoomConfig,
         up: bool,
     ) {
-        let step = self.config.general.remote_brightness_step;
         let current = self.state.load();
+        let lights_on = current.rooms.get(room_id).map(|rs| rs.lights_on).unwrap_or(false);
+        if !lights_on {
+            return;
+        }
+        let step = self.config.general.remote_brightness_step;
         let current_brightness = current
             .rooms
             .get(room_id)
@@ -635,12 +639,18 @@ impl AutomationEngine {
     }
 
     /// Start continuous dimming (hold). Repeats brightness steps every 300ms until cancelled.
+    /// No-op when lights are off.
     fn start_continuous_dimming(
         &mut self,
         room_id: String,
         room_config: crate::config::types::RoomConfig,
         up: bool,
     ) {
+        let lights_on = self.state.load().rooms.get(&room_id).map(|rs| rs.lights_on).unwrap_or(false);
+        if !lights_on {
+            return;
+        }
+
         // Cancel any existing dimming for this room
         if let Some(token) = self.dimming_handles.remove(&room_id) {
             token.cancel();
@@ -713,13 +723,18 @@ impl AutomationEngine {
         });
     }
 
-    /// Set brightness manually, pausing circadian.
+    /// Set brightness manually, pausing circadian. No-op when lights are off.
     async fn set_manual_brightness(
         &self,
         room_id: &str,
         room_config: &crate::config::types::RoomConfig,
         brightness: u8,
     ) {
+        let lights_on = self.state.load().rooms.get(room_id).map(|rs| rs.lights_on).unwrap_or(false);
+        if !lights_on {
+            return;
+        }
+
         // Pause circadian since this is a manual adjustment
         let _ = self
             .state_tx
