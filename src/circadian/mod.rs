@@ -398,10 +398,7 @@ impl CircadianEngine {
                         continue;
                     }
                     if rs.circadian_paused && rs.is_circadian_paused() {
-                        debug!(
-                            "Skipping device push for '{}': circadian paused",
-                            room_id
-                        );
+                        debug!("Skipping device push for '{}': circadian paused", room_id);
                         continue;
                     }
                 } else {
