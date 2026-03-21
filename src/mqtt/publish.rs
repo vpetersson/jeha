@@ -115,9 +115,7 @@ impl Publisher {
         let current = self.state.load();
         if let Some(group) = current.group_map.get(group_name) {
             for member in &group.members {
-                let _ = self
-                    .turn_off_ieee(&member.ieee_address, transition)
-                    .await;
+                let _ = self.turn_off_ieee(&member.ieee_address, transition).await;
             }
         }
         Ok(())
