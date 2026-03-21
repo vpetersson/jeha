@@ -140,6 +140,31 @@ impl Publisher {
         self.set_light_ieee(ieee, &payload).await
     }
 
+    /// Push circadian values to a single device (by IEEE) without `"state":"ON"`.
+    /// Used for per-device fan-out when calibration differs across group members.
+    pub async fn push_circadian_ieee(
+        &self,
+        ieee: &str,
+        brightness: u8,
+        color_temp_mired: Option<u16>,
+        transition: u32,
+    ) -> Result<()> {
+        let current = self.state.load();
+        let cal = calibration::resolve_for_device(ieee, &self.config, &current.device_map);
+        let device_info = current.device_map.get(ieee);
+
+        let calibrated_brightness = cal.apply_brightness(brightness);
+        let mut payload = json!({
+            "brightness": calibrated_brightness,
+            "transition": transition,
+        });
+        if let Some(ct) = color_temp_mired {
+            let calibrated_ct = cal.apply_color_temp(ct, device_info);
+            payload["color_temp"] = json!(calibrated_ct);
+        }
+        self.set_light_ieee(ieee, &payload).await
+    }
+
     pub async fn push_circadian_group(
         &self,
         group_name: &str,

@@ -325,9 +325,9 @@ impl CircadianEngine {
                     } else {
                         None
                     };
-                    // Calibration is applied inside turn_on_ieee
+                    // Calibration is applied inside push_circadian_ieee (no "state":"ON")
                     self.publisher
-                        .turn_on_ieee(ieee, Some(target.brightness), ct, Some(transition))
+                        .push_circadian_ieee(ieee, target.brightness, ct, transition)
                         .await?;
                 }
             }
@@ -417,7 +417,7 @@ impl CircadianEngine {
             };
 
             self.publisher
-                .turn_on_ieee(ieee, Some(target.brightness), ct, Some(3))
+                .push_circadian_ieee(ieee, target.brightness, ct, 3)
                 .await?;
 
             let _ = self
