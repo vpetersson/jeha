@@ -611,7 +611,11 @@ impl AutomationEngine {
         up: bool,
     ) {
         let current = self.state.load();
-        let lights_on = current.rooms.get(room_id).map(|rs| rs.lights_on).unwrap_or(false);
+        let lights_on = current
+            .rooms
+            .get(room_id)
+            .map(|rs| rs.lights_on)
+            .unwrap_or(false);
         if !lights_on {
             return;
         }
@@ -646,7 +650,13 @@ impl AutomationEngine {
         room_config: crate::config::types::RoomConfig,
         up: bool,
     ) {
-        let lights_on = self.state.load().rooms.get(&room_id).map(|rs| rs.lights_on).unwrap_or(false);
+        let lights_on = self
+            .state
+            .load()
+            .rooms
+            .get(&room_id)
+            .map(|rs| rs.lights_on)
+            .unwrap_or(false);
         if !lights_on {
             return;
         }
@@ -730,7 +740,13 @@ impl AutomationEngine {
         room_config: &crate::config::types::RoomConfig,
         brightness: u8,
     ) {
-        let lights_on = self.state.load().rooms.get(room_id).map(|rs| rs.lights_on).unwrap_or(false);
+        let lights_on = self
+            .state
+            .load()
+            .rooms
+            .get(room_id)
+            .map(|rs| rs.lights_on)
+            .unwrap_or(false);
         if !lights_on {
             return;
         }
