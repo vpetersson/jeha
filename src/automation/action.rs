@@ -92,7 +92,7 @@ pub async fn execute_action(
                 .await;
 
             if let Some(ref group) = room_config.z2m_group {
-                publisher.turn_off_group(group, trans).await?;
+                publisher.turn_off_group_with_members(group, trans).await?;
             } else {
                 publish_off_all(room_config, publisher, trans).await?;
             }

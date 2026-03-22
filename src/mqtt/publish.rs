@@ -103,6 +103,24 @@ impl Publisher {
         self.set_light_group(group_name, &payload).await
     }
 
+    /// Turn off a group AND each member device individually.
+    /// Ensures reliability when devices have in-flight individual transitions
+    /// (e.g. from circadian fan-out) that may conflict with group commands.
+    pub async fn turn_off_group_with_members(
+        &self,
+        group_name: &str,
+        transition: Option<u32>,
+    ) -> Result<()> {
+        self.turn_off_group(group_name, transition).await?;
+        let current = self.state.load();
+        if let Some(group) = current.group_map.get(group_name) {
+            for member in &group.members {
+                let _ = self.turn_off_ieee(&member.ieee_address, transition).await;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn turn_on_ieee(
         &self,
         ieee: &str,
