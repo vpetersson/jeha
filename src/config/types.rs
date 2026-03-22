@@ -70,6 +70,10 @@ pub struct GeneralConfig {
     /// Remote brightness step per click (1-254). Default: 25.
     #[serde(default = "default_remote_brightness_step")]
     pub remote_brightness_step: u8,
+    /// Default illuminance threshold (lux) for motion-triggered lights.
+    /// Motion lights-on is skipped when ambient light >= this value. Default: 100.
+    #[serde(default = "default_illuminance_threshold")]
+    pub illuminance_threshold: u16,
 }
 
 fn default_motion_timeout_secs() -> u64 {
@@ -91,6 +95,9 @@ fn default_external_override_secs() -> u64 {
 }
 fn default_remote_brightness_step() -> u8 {
     25
+}
+fn default_illuminance_threshold() -> u16 {
+    100
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
@@ -170,6 +177,16 @@ pub struct RoomConfig {
     /// Schedule gate for built-in motion handling. When set, motion events are only
     /// processed when the current time matches this schedule.
     pub motion_schedule: Option<Schedule>,
+    /// Whether to gate motion-triggered lights based on ambient illuminance.
+    /// When true (default), lights won't turn on if the sensor reports sufficient light.
+    #[serde(default = "default_true")]
+    pub illuminance_gate: bool,
+    /// When true (default), illuminance gate only logs what it would do without
+    /// actually blocking lights. Set to false to enforce the gate.
+    #[serde(default = "default_true")]
+    pub illuminance_log_only: bool,
+    /// Per-room illuminance threshold override (lux). Falls back to general.illuminance_threshold.
+    pub illuminance_threshold: Option<u16>,
     /// Remote controls (IEEE addresses) bound to this room.
     /// Built-in handling: toggle on/off, dimming, arrow_right=night mode, arrow_left=day mode.
     #[serde(default)]
@@ -190,6 +207,11 @@ impl RoomConfig {
     pub fn effective_motion_timeout(&self, global_default: u64) -> Option<u64> {
         self.motion_sensor.as_ref()?;
         Some(self.motion_timeout_secs.unwrap_or(global_default))
+    }
+
+    /// Returns the effective illuminance threshold for this room.
+    pub fn effective_illuminance_threshold(&self, global_default: u16) -> u16 {
+        self.illuminance_threshold.unwrap_or(global_default)
     }
 }
 

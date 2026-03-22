@@ -33,6 +33,7 @@ mod tests {
         let event = Event::MotionDetected {
             room_id: "kitchen".to_string(),
             sensor_ieee: "0x00158d000AAAAAAA".to_string(),
+            illuminance: None,
         };
         assert!(matches_trigger(
             &trigger,
@@ -66,6 +67,7 @@ mod tests {
         let event = Event::MotionDetected {
             room_id: "kitchen".to_string(),
             sensor_ieee: "0x00158d000AAAAAAA".to_string(),
+            illuminance: None,
         };
         assert!(!matches_trigger(&trigger, &event, None));
     }
