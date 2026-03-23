@@ -99,6 +99,7 @@ pub struct RoomState {
     /// These are NOT updated by Z2M echo-backs, only by jeha's own publish actions.
     pub intended_brightness: Option<u8>,
     pub intended_color_temp_mired: Option<u16>,
+    pub last_illuminance: Option<crate::event::Illuminance>,
 }
 
 impl Default for RoomState {
@@ -117,6 +118,7 @@ impl Default for RoomState {
             last_jeha_push: None,
             intended_brightness: None,
             intended_color_temp_mired: None,
+            last_illuminance: None,
         }
     }
 }
@@ -204,6 +206,7 @@ pub enum RoomStateUpdate {
     ExternalChange {
         ttl_secs: u64,
     },
+    Illuminance(crate::event::Illuminance),
 }
 
 pub struct StateManager {
@@ -296,6 +299,9 @@ impl StateManager {
                             room.update_source = UpdateSource::Manual;
                             room.manual_override_until =
                                 Some(Instant::now() + std::time::Duration::from_secs(ttl_secs));
+                        }
+                        RoomStateUpdate::Illuminance(val) => {
+                            room.last_illuminance = Some(val);
                         }
                     }
                 }

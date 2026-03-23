@@ -1,6 +1,15 @@
 use std::sync::Arc;
 
+use serde::Serialize;
 use tokio::sync::broadcast;
+
+#[derive(Debug, Clone, Serialize)]
+pub enum Illuminance {
+    /// Numeric lux value (e.g. IKEA VALLHORN)
+    Lux(u16),
+    /// Boolean threshold from sensor (true = bright enough, e.g. IKEA TRADFRI motion sensor 2)
+    AboveThreshold(bool),
+}
 
 #[derive(Debug, Clone)]
 pub enum Event {
@@ -12,6 +21,7 @@ pub enum Event {
     MotionDetected {
         room_id: String,
         sensor_ieee: String,
+        illuminance: Option<Illuminance>,
     },
     MotionCleared {
         room_id: String,

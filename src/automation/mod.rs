@@ -12,7 +12,7 @@ use tracing::{debug, error, info};
 
 use crate::circadian::CircadianEngine;
 use crate::config::types::{ActionConfig, AppConfig, AutomationConfig};
-use crate::event::{Event, EventBus};
+use crate::event::{Event, EventBus, Illuminance};
 use crate::mqtt::publish::Publisher;
 use crate::state::{RoomStateUpdate, SharedState, StateCommand};
 
@@ -215,7 +215,11 @@ impl AutomationEngine {
         let global_timeout = self.config.general.motion_timeout_secs;
 
         match event {
-            Event::MotionDetected { sensor_ieee, .. } => {
+            Event::MotionDetected {
+                sensor_ieee,
+                illuminance,
+                ..
+            } => {
                 // Find all rooms where this sensor matches and built-in motion is configured
                 let rooms: Vec<(String, crate::config::types::RoomConfig)> = self
                     .config
@@ -238,6 +242,32 @@ impl AutomationEngine {
                                 room_id
                             );
                             continue;
+                        }
+                    }
+
+                    // Illuminance gate
+                    if room_config.illuminance_gate {
+                        let threshold = room_config.effective_illuminance_threshold(
+                            self.config.general.illuminance_threshold,
+                        );
+                        let would_skip = match illuminance {
+                            Some(Illuminance::AboveThreshold(true)) => true,
+                            Some(Illuminance::Lux(lux)) => *lux >= threshold,
+                            _ => false,
+                        };
+                        if would_skip {
+                            if room_config.illuminance_log_only {
+                                info!(
+                                    "Built-in motion: '{}' — would skip (sufficient ambient light: {:?}, threshold: {}) [log_only]",
+                                    room_id, illuminance, threshold
+                                );
+                            } else {
+                                info!(
+                                    "Built-in motion: skipping '{}' — sufficient ambient light ({:?}, threshold: {})",
+                                    room_id, illuminance, threshold
+                                );
+                                continue;
+                            }
                         }
                     }
 

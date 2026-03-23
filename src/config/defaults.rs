@@ -21,6 +21,7 @@ impl Default for GeneralConfig {
             external_color_temp_tolerance: 25,
             external_override_secs: 1800,
             remote_brightness_step: 25,
+            illuminance_threshold: 100,
         }
     }
 }

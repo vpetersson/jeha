@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, info};
 
 use crate::config::types::AppConfig;
-use crate::event::{Event, EventBus};
+use crate::event::{Event, EventBus, Illuminance};
 use crate::state::{
     RoomStateUpdate, SharedState, StateCommand, UpdateSource, Z2mDeviceInfo, Z2mGroupInfo,
     Z2mGroupMember, Z2mScene,
@@ -298,10 +298,33 @@ async fn handle_device_state(
             .map(|d| d.ieee_address.clone());
 
         if let Some(ieee) = ieee {
+            let illuminance = if let Some(lux) = msg.get("illuminance").and_then(|v| v.as_u64()) {
+                Some(Illuminance::Lux(lux as u16))
+            } else {
+                msg.get("illuminance_above_threshold")
+                    .and_then(|v| v.as_bool())
+                    .map(Illuminance::AboveThreshold)
+            };
+
+            // Persist illuminance to room state for observability
+            if let Some(ref illum) = illuminance {
+                for (room_id, rc) in &config.rooms {
+                    if rc.motion_sensor.as_deref() == Some(ieee.as_str()) {
+                        let _ = state_tx
+                            .send(StateCommand::UpdateRoomState {
+                                room_id: room_id.clone(),
+                                update: RoomStateUpdate::Illuminance(illum.clone()),
+                            })
+                            .await;
+                    }
+                }
+            }
+
             if occupancy {
                 event_bus.publish(Event::MotionDetected {
                     room_id: String::new(),
                     sensor_ieee: ieee,
+                    illuminance,
                 });
             } else {
                 event_bus.publish(Event::MotionCleared {
