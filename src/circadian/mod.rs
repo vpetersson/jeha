@@ -70,9 +70,22 @@ impl CircadianEngine {
                 Ok(event) = event_rx.recv() => {
                     match event {
                         Event::DeviceAvailabilityChanged { ieee, available: true } => {
-                            debug!("Device {} came online, pushing circadian state", ieee);
-                            if let Err(e) = self.push_for_device(&ieee).await {
-                                warn!("Failed to push circadian to {}: {}", ieee, e);
+                            let supports_brightness = self
+                                .state
+                                .load()
+                                .device_map
+                                .get(&ieee)
+                                .is_some_and(|d| d.supports_brightness);
+                            if !supports_brightness {
+                                debug!(
+                                    "Device {} came online but does not support brightness, skipping circadian push",
+                                    ieee
+                                );
+                            } else {
+                                debug!("Device {} came online, pushing circadian state", ieee);
+                                if let Err(e) = self.push_for_device(&ieee).await {
+                                    warn!("Failed to push circadian to {}: {}", ieee, e);
+                                }
                             }
                         }
                         Event::MqttConnected => {
@@ -308,11 +321,54 @@ impl CircadianEngine {
             });
 
             if let Some(ref group) = use_group {
+                // Uniform calibration — single group publish
                 published_ct = self.clamp_color_temp_for_group(group, target.color_temp_mired);
                 self.publisher
                     .push_circadian_group(group, target.brightness, published_ct, transition)
                     .await?;
+            } else if let Some(ref group_name) = room_config.z2m_group {
+                // Hybrid: group publish with base values syncs neutral devices,
+                // then individual corrections only for calibrated devices.
+                published_ct = target.color_temp_mired;
+                let clamped_ct =
+                    self.clamp_color_temp_for_group(group_name, target.color_temp_mired);
+                self.publisher
+                    .push_circadian_group(group_name, target.brightness, clamped_ct, transition)
+                    .await?;
+
+                if let Some(group) = current_state.group_map.get(group_name.as_str()) {
+                    for member in &group.members {
+                        let cal = calibration::resolve_for_device(
+                            &member.ieee_address,
+                            &self.config,
+                            &current_state.device_map,
+                        );
+                        if !cal.is_neutral() {
+                            let supports_ct = current_state
+                                .device_map
+                                .get(&member.ieee_address)
+                                .is_some_and(|d| d.supports_color_temp);
+                            let ct = if supports_ct {
+                                Some(self.clamp_color_temp_for_device(
+                                    &member.ieee_address,
+                                    target.color_temp_mired,
+                                ))
+                            } else {
+                                None
+                            };
+                            self.publisher
+                                .push_circadian_ieee(
+                                    &member.ieee_address,
+                                    target.brightness,
+                                    ct,
+                                    transition,
+                                )
+                                .await?;
+                        }
+                    }
+                }
             } else {
+                // No group — fall back to per-device publish
                 published_ct = target.color_temp_mired;
                 let lights = self.lights_for_room(room_config, &current_state);
                 for ieee in &lights {
@@ -325,7 +381,6 @@ impl CircadianEngine {
                     } else {
                         None
                     };
-                    // Calibration is applied inside push_circadian_ieee (no "state":"ON")
                     self.publisher
                         .push_circadian_ieee(ieee, target.brightness, ct, transition)
                         .await?;

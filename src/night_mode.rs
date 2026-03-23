@@ -358,6 +358,61 @@ impl NightModeScheduler {
                 .await;
             }
         }
+
+        // Fallback: catch stale night mode that the edge detection missed.
+        // If night mode is active, we're within 60 minutes past wake_time,
+        // and night mode was activated more than 2 hours ago, force-deactivate.
+        for (room_id, room_config) in &self.config.rooms {
+            if !room_config.circadian_enabled {
+                continue;
+            }
+
+            let is_active = current
+                .rooms
+                .get(room_id)
+                .map(|rs| rs.night_mode_active)
+                .unwrap_or(false);
+            if !is_active {
+                continue;
+            }
+
+            let defaults = room_config.effective_circadian(&self.config.circadian.defaults);
+            let wake_minutes = parse_time_to_minutes(&defaults.wake_time);
+            let current_minutes = now.minutes as u32;
+
+            // Check if we're within the catch-up window: [wake_time, wake_time + 60min]
+            let in_catchup = current_minutes >= wake_minutes
+                && current_minutes <= wake_minutes.saturating_add(60);
+            if !in_catchup {
+                continue;
+            }
+
+            // Only deactivate if night mode was set more than 2 hours ago (stale)
+            let stale = current
+                .rooms
+                .get(room_id)
+                .and_then(|rs| rs.night_mode_since)
+                .is_some_and(|since| since.elapsed() > Duration::from_secs(2 * 3600));
+            if !stale {
+                continue;
+            }
+
+            info!(
+                "Night mode fallback deactivation: clearing stale night mode in '{}' (past wake_time)",
+                room_id
+            );
+            self.suppressed.insert(room_id.clone());
+            let _ = deactivate_night_mode(
+                room_id,
+                room_config,
+                &self.publisher,
+                &self.state,
+                &self.state_tx,
+                &self.event_bus,
+                &self.circadian_engine,
+            )
+            .await;
+        }
     }
 }
 
