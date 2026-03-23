@@ -83,6 +83,9 @@ pub struct RoomState {
     #[serde(skip)]
     pub last_motion: Option<Instant>,
     pub night_mode_active: bool,
+    /// When night mode was activated (for fallback wake-time deactivation).
+    #[serde(skip)]
+    pub night_mode_since: Option<Instant>,
     pub update_source: UpdateSource,
     pub circadian_paused: bool,
     /// When set, circadian auto-resumes after this instant.
@@ -111,6 +114,7 @@ impl Default for RoomState {
             occupancy: false,
             last_motion: None,
             night_mode_active: false,
+            night_mode_since: None,
             update_source: UpdateSource::Circadian,
             circadian_paused: false,
             circadian_paused_until: None,
@@ -258,6 +262,11 @@ impl StateManager {
                         }
                         RoomStateUpdate::NightMode(active) => {
                             room.night_mode_active = active;
+                            room.night_mode_since = if active {
+                                Some(room.night_mode_since.unwrap_or_else(Instant::now))
+                            } else {
+                                None
+                            };
                         }
                         RoomStateUpdate::CircadianPause { paused, until } => {
                             room.circadian_paused = paused;
