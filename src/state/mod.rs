@@ -253,6 +253,10 @@ impl StateManager {
                         }
                         RoomStateUpdate::LightsOff => {
                             room.lights_on = false;
+                            room.circadian_paused = false;
+                            room.circadian_paused_until = None;
+                            room.manual_override_until = None;
+                            room.update_source = UpdateSource::Circadian;
                         }
                         RoomStateUpdate::Occupancy(occ) => {
                             room.occupancy = occ;
