@@ -306,7 +306,7 @@ impl AutomationEngine {
                                 use_circadian: true,
                                 brightness: None,
                                 color_temp_k: None,
-                                transition: None,
+                                transition: Some(1),
                             }
                         };
                         let publisher = self.publisher.clone();
@@ -528,41 +528,27 @@ impl AutomationEngine {
                 }
 
                 RemoteActionType::On => {
-                    let current = self.state.load();
-                    let lights_on = current
-                        .rooms
-                        .get(room_id)
-                        .map(|rs| rs.lights_on)
-                        .unwrap_or(false);
-
-                    if lights_on {
-                        debug!(
-                            "Remote: lights already on in '{}', ignoring ON action",
-                            room_id
-                        );
-                    } else {
-                        info!("Remote: turning on lights in '{}' (circadian)", room_id);
-                        let on = ActionConfig::LightsOn {
-                            use_circadian: true,
-                            brightness: None,
-                            color_temp_k: None,
-                            transition: Some(1),
-                        };
-                        let publisher = self.publisher.clone();
-                        let state_tx = self.state_tx.clone();
-                        let circadian = self.circadian_engine.clone();
-                        let rid = room_id.clone();
-                        let rc = room_config.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) = action::execute_action(
-                                &on, &rid, &rc, &publisher, &state_tx, &circadian,
-                            )
-                            .await
-                            {
-                                error!("Remote: failed to turn on '{}': {}", rid, e);
-                            }
-                        });
-                    }
+                    info!("Remote: turning on lights in '{}' (circadian)", room_id);
+                    let on = ActionConfig::LightsOn {
+                        use_circadian: true,
+                        brightness: None,
+                        color_temp_k: None,
+                        transition: Some(1),
+                    };
+                    let publisher = self.publisher.clone();
+                    let state_tx = self.state_tx.clone();
+                    let circadian = self.circadian_engine.clone();
+                    let rid = room_id.clone();
+                    let rc = room_config.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = action::execute_action(
+                            &on, &rid, &rc, &publisher, &state_tx, &circadian,
+                        )
+                        .await
+                        {
+                            error!("Remote: failed to turn on '{}': {}", rid, e);
+                        }
+                    });
                 }
 
                 RemoteActionType::Off => {
