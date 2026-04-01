@@ -22,10 +22,19 @@ Use a hybrid group+individual publish strategy when fan-out is needed:
 
 For the kitchen example, this reduces 5 individual publishes to 1 group + 1 individual (Kitchen Table only).
 
+## Refinement: Capability-aware per-device corrections
+
+The original hybrid approach only sent per-device corrections to devices with non-neutral **calibration**. This missed a second source of value mismatch: groups with mixed **capabilities** (e.g., GU10 spotlights with color_temp range 153-454 mired alongside regular bulbs with range 150-500 mired). The group-level clamped value (intersection of all ranges) could be wrong for individual devices, and the double-command (group + correction) caused oscillation at the Zigbee level.
+
+The refined approach:
+
+1. **Detect mixed groups** — check for both calibration differences AND capability differences (different light types or color_temp ranges) via `group_has_mixed_capabilities`.
+2. **Group publish as crude estimate** — send brightness + intersection-clamped color_temp to the group for synchronized transitions.
+3. **Per-device corrections when value differs** — for each CT-capable member, compute its ideal color_temp (per-device clamping + calibration). Only send a per-device correction if this differs from the group-level value. This eliminates unnecessary MQTT traffic for devices that are already correct.
+
 ## Consequences
 
-- Neutral-calibration devices in mixed groups now transition in perfect sync (no flicker)
-- MQTT traffic reduced from N individual publishes to 1 group + M calibrated-device publishes (where M << N)
-- Calibrated devices experience a brief moment (~100ms) with base values before correction arrives — imperceptible during slow circadian transitions
-- The group publish path (`push_circadian_group`) remains unchanged for uniform groups
+- Neutral-calibration devices in uniform groups still use a single group publish (no change)
+- Mixed-capability groups now get per-device color_temp corrections, not just mixed-calibration groups
+- Per-device corrections are skipped when the device's ideal value matches the group value (minimal MQTT traffic)
 - The per-device fallback path is preserved for rooms with no Z2M group (explicit `lights` list only)

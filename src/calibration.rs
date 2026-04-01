@@ -85,6 +85,45 @@ pub fn group_needs_fanout(
     })
 }
 
+/// Returns true if group members have different light types or different
+/// color_temp ranges, meaning the group-level clamped value won't be
+/// correct for all members and per-device corrections are needed.
+pub fn group_has_mixed_capabilities(
+    group: &Z2mGroupInfo,
+    device_map: &HashMap<String, Z2mDeviceInfo>,
+) -> bool {
+    let mut first_light_type: Option<LightType> = None;
+    let mut first_ct_min: Option<Option<u16>> = None;
+    let mut first_ct_max: Option<Option<u16>> = None;
+
+    for member in &group.members {
+        let Some(device) = device_map.get(&member.ieee_address) else {
+            continue;
+        };
+        let lt = device.light_type();
+
+        match first_light_type {
+            None => {
+                first_light_type = Some(lt);
+                first_ct_min = Some(device.color_temp_min);
+                first_ct_max = Some(device.color_temp_max);
+            }
+            Some(first) => {
+                if lt != first {
+                    return true;
+                }
+                if device.supports_color_temp
+                    && (Some(device.color_temp_min) != first_ct_min
+                        || Some(device.color_temp_max) != first_ct_max)
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Convenience: resolve calibration for a device using the full AppConfig and device map.
 pub fn resolve_for_device(
     ieee: &str,
@@ -299,5 +338,114 @@ mod tests {
         };
 
         assert!(!group_needs_fanout(&group, &config, &device_map));
+    }
+
+    #[test]
+    fn test_mixed_capabilities_different_light_types() {
+        use crate::state::{Z2mGroupInfo, Z2mGroupMember};
+
+        let mut device_map = HashMap::new();
+        // CT-only GU10
+        let gu10 = Z2mDeviceInfo {
+            ieee_address: "0x0011223344556677".to_string(),
+            ..make_device(true, false, Some(153), Some(454))
+        };
+        // RGBW regular bulb
+        let rgbw = Z2mDeviceInfo {
+            ieee_address: "0xAABBCCDDEEFF0011".to_string(),
+            ..make_device(true, true, Some(150), Some(500))
+        };
+        device_map.insert("0x0011223344556677".to_string(), gu10);
+        device_map.insert("0xAABBCCDDEEFF0011".to_string(), rgbw);
+
+        let group = Z2mGroupInfo {
+            id: 1,
+            friendly_name: "kitchen".to_string(),
+            members: vec![
+                Z2mGroupMember {
+                    ieee_address: "0x0011223344556677".to_string(),
+                    endpoint: 1,
+                },
+                Z2mGroupMember {
+                    ieee_address: "0xAABBCCDDEEFF0011".to_string(),
+                    endpoint: 1,
+                },
+            ],
+            scenes: vec![],
+        };
+
+        assert!(group_has_mixed_capabilities(&group, &device_map));
+    }
+
+    #[test]
+    fn test_mixed_capabilities_different_ct_ranges() {
+        use crate::state::{Z2mGroupInfo, Z2mGroupMember};
+
+        let mut device_map = HashMap::new();
+        // Two CT-only lights with different ranges
+        let ct1 = Z2mDeviceInfo {
+            ieee_address: "0x0011223344556677".to_string(),
+            ..make_device(true, false, Some(153), Some(454))
+        };
+        let ct2 = Z2mDeviceInfo {
+            ieee_address: "0xAABBCCDDEEFF0011".to_string(),
+            ..make_device(true, false, Some(150), Some(500))
+        };
+        device_map.insert("0x0011223344556677".to_string(), ct1);
+        device_map.insert("0xAABBCCDDEEFF0011".to_string(), ct2);
+
+        let group = Z2mGroupInfo {
+            id: 1,
+            friendly_name: "kitchen".to_string(),
+            members: vec![
+                Z2mGroupMember {
+                    ieee_address: "0x0011223344556677".to_string(),
+                    endpoint: 1,
+                },
+                Z2mGroupMember {
+                    ieee_address: "0xAABBCCDDEEFF0011".to_string(),
+                    endpoint: 1,
+                },
+            ],
+            scenes: vec![],
+        };
+
+        assert!(group_has_mixed_capabilities(&group, &device_map));
+    }
+
+    #[test]
+    fn test_uniform_capabilities() {
+        use crate::state::{Z2mGroupInfo, Z2mGroupMember};
+
+        let mut device_map = HashMap::new();
+        // Two identical CT-only lights
+        let ct1 = Z2mDeviceInfo {
+            ieee_address: "0x0011223344556677".to_string(),
+            ..make_device(true, false, Some(153), Some(500))
+        };
+        let ct2 = Z2mDeviceInfo {
+            ieee_address: "0xAABBCCDDEEFF0011".to_string(),
+            ..make_device(true, false, Some(153), Some(500))
+        };
+        device_map.insert("0x0011223344556677".to_string(), ct1);
+        device_map.insert("0xAABBCCDDEEFF0011".to_string(), ct2);
+
+        let group = Z2mGroupInfo {
+            id: 1,
+            friendly_name: "bedroom".to_string(),
+            members: vec![
+                Z2mGroupMember {
+                    ieee_address: "0x0011223344556677".to_string(),
+                    endpoint: 1,
+                },
+                Z2mGroupMember {
+                    ieee_address: "0xAABBCCDDEEFF0011".to_string(),
+                    endpoint: 1,
+                },
+            ],
+            scenes: vec![],
+        };
+
+        assert!(!group_has_mixed_capabilities(&group, &device_map));
     }
 }
