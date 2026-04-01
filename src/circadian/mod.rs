@@ -303,64 +303,70 @@ impl CircadianEngine {
             }
 
             let published_ct;
-            let use_group = room_config.z2m_group.as_ref().and_then(|group_name| {
+            let needs_per_device = room_config.z2m_group.as_ref().and_then(|group_name| {
                 let group = current_state.group_map.get(group_name)?;
-                if calibration::group_needs_fanout(
+                let has_cal_diffs = calibration::group_needs_fanout(
                     group,
                     &self.config.light_calibration,
                     &current_state.device_map,
-                ) {
+                );
+                let has_cap_diffs =
+                    calibration::group_has_mixed_capabilities(group, &current_state.device_map);
+                if has_cal_diffs || has_cap_diffs {
                     debug!(
-                        "Room '{}': fan-out due to calibration differences in group '{}'",
-                        room_id, group_name
+                        "Room '{}': per-device color_temp for group '{}' \
+                         (calibration_diffs={}, capability_diffs={})",
+                        room_id, group_name, has_cal_diffs, has_cap_diffs
                     );
-                    None
+                    Some(true)
                 } else {
-                    Some(group_name.clone())
+                    Some(false)
                 }
             });
 
-            if let Some(ref group) = use_group {
-                // Uniform calibration — single group publish
-                published_ct = self.clamp_color_temp_for_group(group, target.color_temp_mired);
+            if needs_per_device == Some(false) {
+                // Uniform group — single group publish
+                let group_name = room_config.z2m_group.as_ref().unwrap();
+                published_ct = self.clamp_color_temp_for_group(group_name, target.color_temp_mired);
                 self.publisher
-                    .push_circadian_group(group, target.brightness, published_ct, transition)
+                    .push_circadian_group(group_name, target.brightness, published_ct, transition)
                     .await?;
             } else if let Some(ref group_name) = room_config.z2m_group {
-                // Hybrid: group publish with base values syncs neutral devices,
-                // then individual corrections only for calibrated devices.
-                published_ct = target.color_temp_mired;
+                // Mixed group: group publish as crude estimate, then per-device
+                // corrections for any member whose ideal color_temp differs.
                 let clamped_ct =
                     self.clamp_color_temp_for_group(group_name, target.color_temp_mired);
+                published_ct = clamped_ct;
                 self.publisher
                     .push_circadian_group(group_name, target.brightness, clamped_ct, transition)
                     .await?;
 
                 if let Some(group) = current_state.group_map.get(group_name.as_str()) {
                     for member in &group.members {
+                        let supports_ct = current_state
+                            .device_map
+                            .get(&member.ieee_address)
+                            .is_some_and(|d| d.supports_color_temp);
+                        if !supports_ct {
+                            continue;
+                        }
+                        let device_ct = self.clamp_color_temp_for_device(
+                            &member.ieee_address,
+                            target.color_temp_mired,
+                        );
                         let cal = calibration::resolve_for_device(
                             &member.ieee_address,
                             &self.config,
                             &current_state.device_map,
                         );
-                        if !cal.is_neutral() {
-                            let supports_ct = current_state
-                                .device_map
-                                .get(&member.ieee_address)
-                                .is_some_and(|d| d.supports_color_temp);
-                            let ct = if supports_ct {
-                                Some(self.clamp_color_temp_for_device(
-                                    &member.ieee_address,
-                                    target.color_temp_mired,
-                                ))
-                            } else {
-                                None
-                            };
+                        let device_info = current_state.device_map.get(&member.ieee_address);
+                        let calibrated_ct = cal.apply_color_temp(device_ct, device_info);
+                        if calibrated_ct != clamped_ct {
                             self.publisher
                                 .push_circadian_ieee(
                                     &member.ieee_address,
                                     target.brightness,
-                                    ct,
+                                    Some(device_ct),
                                     transition,
                                 )
                                 .await?;
