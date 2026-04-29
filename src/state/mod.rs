@@ -255,8 +255,9 @@ impl StateManager {
                             room.lights_on = false;
                             room.circadian_paused = false;
                             room.circadian_paused_until = None;
-                            room.manual_override_until = None;
-                            room.update_source = UpdateSource::Circadian;
+                            // Keep manual_override_until and update_source so the next
+                            // lights-on (e.g. from motion) can restore the user's manual
+                            // brightness/CT until the TTL expires.
                         }
                         RoomStateUpdate::Occupancy(occ) => {
                             room.occupancy = occ;

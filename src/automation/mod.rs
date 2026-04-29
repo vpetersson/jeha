@@ -14,7 +14,7 @@ use crate::circadian::CircadianEngine;
 use crate::config::types::{ActionConfig, AppConfig, AutomationConfig};
 use crate::event::{Event, EventBus, Illuminance};
 use crate::mqtt::publish::Publisher;
-use crate::state::{RoomStateUpdate, SharedState, StateCommand};
+use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum AutomationState {
@@ -282,6 +282,9 @@ impl AutomationEngine {
                     let room_state = current.rooms.get(&room_id);
                     let lights_on = room_state.map(|rs| rs.lights_on).unwrap_or(false);
                     let is_night_mode = room_state.map(|rs| rs.night_mode_active).unwrap_or(false);
+                    let manual_active = room_state.is_some_and(|rs| rs.is_manual_override_active());
+                    let manual_brightness = room_state.and_then(|rs| rs.current_brightness);
+                    let manual_ct_mired = room_state.and_then(|rs| rs.current_color_temp_mired);
 
                     if !lights_on {
                         let action = if is_night_mode {
@@ -295,6 +298,20 @@ impl AutomationEngine {
                                 use_circadian: false,
                                 brightness: Some(enm.brightness),
                                 color_temp_k: Some(enm.color_temp_k),
+                                transition: Some(1),
+                            }
+                        } else if manual_active && manual_brightness.is_some() {
+                            let ct_k = manual_ct_mired
+                                .map(|m| 1_000_000u32 / m as u32)
+                                .map(|k| k as u16);
+                            info!(
+                                "Built-in motion: turning on lights in '{}' (manual override: brightness={:?}, ct={:?}K)",
+                                room_id, manual_brightness, ct_k
+                            );
+                            ActionConfig::LightsOn {
+                                use_circadian: false,
+                                brightness: manual_brightness,
+                                color_temp_k: ct_k,
                                 transition: Some(1),
                             }
                         } else {
@@ -314,6 +331,7 @@ impl AutomationEngine {
                         let circadian = self.circadian_engine.clone();
                         let room_id_clone = room_id.clone();
                         let room_config_clone = room_config.clone();
+                        let restore_manual = manual_active && manual_brightness.is_some();
                         tokio::spawn(async move {
                             if let Err(e) = action::execute_action(
                                 &action,
@@ -329,6 +347,22 @@ impl AutomationEngine {
                                     "Built-in motion: failed to turn on lights in '{}': {}",
                                     room_id_clone, e
                                 );
+                                return;
+                            }
+                            if restore_manual {
+                                // execute_action set source=Automation; flip back to Manual
+                                // so subsequent motion-off/on cycles still restore these values
+                                // until the TTL expires.
+                                let _ = state_tx
+                                    .send(StateCommand::UpdateRoomState {
+                                        room_id: room_id_clone.clone(),
+                                        update: RoomStateUpdate::LightsOn {
+                                            brightness: None,
+                                            color_temp_mired: None,
+                                            source: UpdateSource::Manual,
+                                        },
+                                    })
+                                    .await;
                             }
                         });
                     } else {
@@ -725,6 +759,8 @@ impl AutomationEngine {
         let publisher = self.publisher.clone();
         let circadian_engine = self.circadian_engine.clone();
         let step = self.config.general.remote_brightness_step;
+        let manual_ttl =
+            std::time::Duration::from_secs(self.config.general.manual_override_ttl_mins * 60);
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(300));
@@ -735,6 +771,14 @@ impl AutomationEngine {
                     update: RoomStateUpdate::CircadianPause {
                         paused: true,
                         until: None,
+                    },
+                })
+                .await;
+            let _ = state_tx
+                .send(StateCommand::UpdateRoomState {
+                    room_id: room_id.clone(),
+                    update: RoomStateUpdate::ManualOverrideTtl {
+                        until: Some(std::time::Instant::now() + manual_ttl),
                     },
                 })
                 .await;
@@ -778,6 +822,17 @@ impl AutomationEngine {
                             error!("Remote: continuous dim failed in '{}': {}", room_id, e);
                             break;
                         }
+                        // Flip source back to Manual after each step.
+                        let _ = state_tx
+                            .send(StateCommand::UpdateRoomState {
+                                room_id: room_id.clone(),
+                                update: RoomStateUpdate::LightsOn {
+                                    brightness: None,
+                                    color_temp_mired: None,
+                                    source: UpdateSource::Manual,
+                                },
+                            })
+                            .await;
                     }
                 }
             }
@@ -814,6 +869,18 @@ impl AutomationEngine {
             })
             .await;
 
+        // Persist manual override across motion-off cycles via TTL.
+        let ttl = std::time::Duration::from_secs(self.config.general.manual_override_ttl_mins * 60);
+        let _ = self
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::ManualOverrideTtl {
+                    until: Some(std::time::Instant::now() + ttl),
+                },
+            })
+            .await;
+
         let action = ActionConfig::LightsOn {
             use_circadian: false,
             brightness: Some(brightness),
@@ -831,7 +898,22 @@ impl AutomationEngine {
         .await
         {
             error!("Remote: failed to set brightness in '{}': {}", room_id, e);
+            return;
         }
+
+        // execute_action set source=Automation; flip to Manual so the TTL is honored
+        // by is_manual_override_active() and motion-on restores these values.
+        let _ = self
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::LightsOn {
+                    brightness: None,
+                    color_temp_mired: None,
+                    source: UpdateSource::Manual,
+                },
+            })
+            .await;
     }
 }
 
