@@ -430,21 +430,25 @@ async fn handle_device_state(
             if brightness_changed || color_temp_changed {
                 // Dedup rapid duplicates: the actor's pause update from a prior
                 // message may not yet be visible in `current`, so multiple
-                // messages can pass the `circadian_paused` guard above.
-                let mut dedup = EXTERNAL_CHANGE_DEDUP.lock().unwrap();
-                let now = Instant::now();
-                let recently_emitted = dedup
-                    .get(&room_id)
-                    .is_some_and(|t| now.duration_since(*t) < EXTERNAL_CHANGE_DEDUP_WINDOW);
+                // messages can pass the `circadian_paused` guard above. Scope
+                // the MutexGuard tightly so it cannot be held across `.await`.
+                let recently_emitted = {
+                    let mut dedup = EXTERNAL_CHANGE_DEDUP.lock().unwrap();
+                    let now = Instant::now();
+                    let already = dedup
+                        .get(&room_id)
+                        .is_some_and(|t| now.duration_since(*t) < EXTERNAL_CHANGE_DEDUP_WINDOW);
+                    if !already {
+                        dedup.insert(room_id.clone(), now);
+                    }
+                    already
+                };
                 if recently_emitted {
                     debug!(
                         "External light change for '{}' suppressed (dedup window)",
                         room_id
                     );
                 } else {
-                    dedup.insert(room_id.clone(), now);
-                    drop(dedup);
-
                     let external_override_secs = config.general.external_override_secs;
                     info!(
                         "External light change detected in room '{}' (via '{}'): \
