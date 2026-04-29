@@ -67,6 +67,10 @@ pub struct GeneralConfig {
     /// Default: 1800 (30 minutes).
     #[serde(default = "default_external_override_secs")]
     pub external_override_secs: u64,
+    /// How long manual brightness/CT changes via remotes persist across motion-off cycles (minutes).
+    /// After this TTL, circadian resumes automatically. Default: 60.
+    #[serde(default = "default_manual_override_ttl_mins")]
+    pub manual_override_ttl_mins: u64,
     /// Remote brightness step per click (1-254). Default: 25.
     #[serde(default = "default_remote_brightness_step")]
     pub remote_brightness_step: u8,
@@ -92,6 +96,9 @@ fn default_external_color_temp_tolerance() -> u64 {
 }
 fn default_external_override_secs() -> u64 {
     1800
+}
+fn default_manual_override_ttl_mins() -> u64 {
+    60
 }
 fn default_remote_brightness_step() -> u8 {
     25
