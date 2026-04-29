@@ -75,22 +75,20 @@ pub async fn run_init(host: &str, port: u16, output: &Path, base_topic: &str) ->
             }
             event = event_loop.poll() => {
                 match event {
-                    Ok(Event::Incoming(Packet::ConnAck(_))) => {
-                        if !subscribed {
-                            // Subscribe to bridge responses
-                            client.subscribe(format!("{}/bridge/#", base_topic), QoS::AtLeastOnce).await?;
-                            subscribed = true;
-                            info!("Connected, requesting data from Z2M...");
-                            // Actively request devices and groups from Z2M
-                            client.publish(
-                                format!("{}/bridge/request/devices", base_topic),
-                                QoS::AtLeastOnce, false, "",
-                            ).await?;
-                            client.publish(
-                                format!("{}/bridge/request/groups", base_topic),
-                                QoS::AtLeastOnce, false, "",
-                            ).await?;
-                        }
+                    Ok(Event::Incoming(Packet::ConnAck(_))) if !subscribed => {
+                        // Subscribe to bridge responses
+                        client.subscribe(format!("{}/bridge/#", base_topic), QoS::AtLeastOnce).await?;
+                        subscribed = true;
+                        info!("Connected, requesting data from Z2M...");
+                        // Actively request devices and groups from Z2M
+                        client.publish(
+                            format!("{}/bridge/request/devices", base_topic),
+                            QoS::AtLeastOnce, false, "",
+                        ).await?;
+                        client.publish(
+                            format!("{}/bridge/request/groups", base_topic),
+                            QoS::AtLeastOnce, false, "",
+                        ).await?;
                     }
                     Ok(Event::Incoming(Packet::Publish(publish))) => {
                         let topic = &publish.topic;
