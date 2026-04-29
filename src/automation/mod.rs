@@ -373,9 +373,7 @@ impl AutomationEngine {
                     // Use night mode timeout if active
                     let current = self.state.load();
                     let room_state = current.rooms.get(&room_id);
-                    let is_night_mode = room_state
-                        .map(|rs| rs.night_mode_active)
-                        .unwrap_or(false);
+                    let is_night_mode = room_state.map(|rs| rs.night_mode_active).unwrap_or(false);
                     if is_night_mode {
                         let enm =
                             room_config.effective_night_mode(&self.config.night_mode.defaults);
