@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bytes::Bytes;
@@ -12,6 +14,14 @@ use crate::state::{
     RoomStateUpdate, SharedState, StateCommand, UpdateSource, Z2mDeviceInfo, Z2mGroupInfo,
     Z2mGroupMember, Z2mScene,
 };
+
+/// Per-room timestamp of the most recent external-change emission. Used to
+/// deduplicate rapid back-to-back MQTT messages that all read a stale
+/// `circadian_paused=false` snapshot before the StateManager actor applies
+/// the pause from the first message.
+static EXTERNAL_CHANGE_DEDUP: LazyLock<Mutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+const EXTERNAL_CHANGE_DEDUP_WINDOW: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Deserialize)]
 struct Z2mDevice {
@@ -418,33 +428,55 @@ async fn handle_device_state(
             };
 
             if brightness_changed || color_temp_changed {
-                let external_override_secs = config.general.external_override_secs;
-                info!(
-                    "External light change detected in room '{}' (via '{}'): \
-                     brightness {:?}->{:?} (intended {:?}), color_temp {:?}->{:?} (intended {:?}). \
-                     Pausing circadian for {}m.",
-                    room_id,
-                    device_name,
-                    room_state.current_brightness,
-                    has_brightness,
-                    room_state.intended_brightness,
-                    room_state.current_color_temp_mired,
-                    has_color_temp,
-                    room_state.intended_color_temp_mired,
-                    external_override_secs / 60,
-                );
-                let _ = state_tx
-                    .send(StateCommand::UpdateRoomState {
-                        room_id: room_id.clone(),
-                        update: RoomStateUpdate::ExternalChange {
-                            ttl_secs: external_override_secs,
-                        },
-                    })
-                    .await;
-                event_bus.publish(Event::ExternalLightChange {
-                    room_id,
-                    device_name: device_name.to_string(),
-                });
+                // Dedup rapid duplicates: the actor's pause update from a prior
+                // message may not yet be visible in `current`, so multiple
+                // messages can pass the `circadian_paused` guard above. Scope
+                // the MutexGuard tightly so it cannot be held across `.await`.
+                let recently_emitted = {
+                    let mut dedup = EXTERNAL_CHANGE_DEDUP.lock().unwrap();
+                    let now = Instant::now();
+                    let already = dedup
+                        .get(&room_id)
+                        .is_some_and(|t| now.duration_since(*t) < EXTERNAL_CHANGE_DEDUP_WINDOW);
+                    if !already {
+                        dedup.insert(room_id.clone(), now);
+                    }
+                    already
+                };
+                if recently_emitted {
+                    debug!(
+                        "External light change for '{}' suppressed (dedup window)",
+                        room_id
+                    );
+                } else {
+                    let external_override_secs = config.general.external_override_secs;
+                    info!(
+                        "External light change detected in room '{}' (via '{}'): \
+                         brightness {:?}->{:?} (intended {:?}), color_temp {:?}->{:?} (intended {:?}). \
+                         Pausing circadian for {}m.",
+                        room_id,
+                        device_name,
+                        room_state.current_brightness,
+                        has_brightness,
+                        room_state.intended_brightness,
+                        room_state.current_color_temp_mired,
+                        has_color_temp,
+                        room_state.intended_color_temp_mired,
+                        external_override_secs / 60,
+                    );
+                    let _ = state_tx
+                        .send(StateCommand::UpdateRoomState {
+                            room_id: room_id.clone(),
+                            update: RoomStateUpdate::ExternalChange {
+                                ttl_secs: external_override_secs,
+                            },
+                        })
+                        .await;
+                    event_bus.publish(Event::ExternalLightChange {
+                        room_id,
+                        device_name: device_name.to_string(),
+                    });
+                }
             }
         }
     }

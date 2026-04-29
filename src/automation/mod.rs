@@ -372,15 +372,27 @@ impl AutomationEngine {
 
                     // Use night mode timeout if active
                     let current = self.state.load();
-                    let is_night_mode = current
-                        .rooms
-                        .get(&room_id)
-                        .map(|rs| rs.night_mode_active)
-                        .unwrap_or(false);
+                    let room_state = current.rooms.get(&room_id);
+                    let is_night_mode = room_state.map(|rs| rs.night_mode_active).unwrap_or(false);
                     if is_night_mode {
                         let enm =
                             room_config.effective_night_mode(&self.config.night_mode.defaults);
                         timeout_secs = enm.motion_timeout_secs;
+                    }
+
+                    // Skip scheduling an off-timer if the lights are already off.
+                    // Without this guard, every MotionCleared event after lights-out
+                    // queues a redundant LightsOff publish to Z2M.
+                    let lights_on = room_state.map(|rs| rs.lights_on).unwrap_or(false);
+                    if !lights_on {
+                        if let Some(handle) = self.motion_off_handles.remove(&room_id) {
+                            handle.abort();
+                        }
+                        debug!(
+                            "Built-in motion: ignoring clear for '{}' — lights already off",
+                            room_id
+                        );
+                        continue;
                     }
 
                     // Cancel existing off-timer
