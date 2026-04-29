@@ -318,6 +318,10 @@ impl NightModeScheduler {
             }
         }
 
+        // Track rooms already deactivated this tick so the fallback loop below
+        // doesn't re-fire on the same stale `current` snapshot.
+        let mut deactivated_this_tick: HashSet<String> = HashSet::new();
+
         // Wake-time deactivation: clear night mode when crossing wake_time
         for (room_id, room_config) in &self.config.rooms {
             if !room_config.circadian_enabled {
@@ -346,6 +350,7 @@ impl NightModeScheduler {
                     room_id
                 );
                 self.suppressed.insert(room_id.clone());
+                deactivated_this_tick.insert(room_id.clone());
                 let _ = deactivate_night_mode(
                     room_id,
                     room_config,
@@ -364,6 +369,12 @@ impl NightModeScheduler {
         // and night mode was activated more than 2 hours ago, force-deactivate.
         for (room_id, room_config) in &self.config.rooms {
             if !room_config.circadian_enabled {
+                continue;
+            }
+
+            // Skip rooms the wake-time loop just deactivated; the `current`
+            // snapshot is stale w.r.t. the actor's pending state update.
+            if deactivated_this_tick.contains(room_id) {
                 continue;
             }
 
