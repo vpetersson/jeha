@@ -634,7 +634,17 @@ pub async fn set_scene(
         Vec::new()
     };
 
-    // Pause circadian
+    // Pause circadian before publishing so a circadian tick can't race the
+    // scene. Snapshot the prior pause state first: if the publish fails we
+    // roll the pause back so a failed call leaves no side effects.
+    let prior_pause = {
+        let current = app.state.load();
+        current
+            .rooms
+            .get(&room_id)
+            .map(|rs| (rs.circadian_paused, rs.circadian_paused_until))
+            .unwrap_or((false, None))
+    };
     let _ = app
         .state_tx
         .send(StateCommand::UpdateRoomState {
@@ -646,11 +656,11 @@ pub async fn set_scene(
         })
         .await;
 
-    if let Some(ref group) = use_group {
+    let publish_result: Result<(), String> = if let Some(ref group) = use_group {
         app.publisher
             .turn_on_group(group, Some(brightness), Some(ct_mired), Some(3))
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+            .map_err(|e| e.to_string())
     } else {
         let mut failed = 0usize;
         for ieee in &lights {
@@ -664,12 +674,27 @@ pub async fn set_scene(
             }
         }
         if failed == lights.len() {
-            return Err(ApiError::Internal(format!(
+            Err(format!(
                 "Failed to publish to all {} lights in '{}'",
                 lights.len(),
                 room_id
-            )));
+            ))
+        } else {
+            Ok(())
         }
+    };
+    if let Err(e) = publish_result {
+        let _ = app
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::CircadianPause {
+                    paused: prior_pause.0,
+                    until: prior_pause.1,
+                },
+            })
+            .await;
+        return Err(ApiError::Internal(e));
     }
 
     let _ = app
@@ -823,6 +848,16 @@ pub async fn recall_z2m_scene(
         )));
     }
 
+    // Snapshot the room before mutating, so a failed publish rolls back the
+    // pause / Manual source / override TTL instead of leaving them applied.
+    let prior = app
+        .state
+        .load()
+        .rooms
+        .get(&room_id)
+        .cloned()
+        .unwrap_or_default();
+
     // Pause circadian
     let _ = app
         .state_tx
@@ -858,10 +893,31 @@ pub async fn recall_z2m_scene(
         })
         .await;
 
-    app.publisher
+    if let Err(e) = app
+        .publisher
         .recall_scene_group(group_name, body.scene_id)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    {
+        // Restore the TTL first so RestoreLights sees an unchanged
+        // manual_override_until and restores update_source too.
+        let _ = app
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::ManualOverrideTtl {
+                    until: prior.manual_override_until,
+                },
+            })
+            .await;
+        let _ = app
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::RestoreLights(Box::new(prior)),
+            })
+            .await;
+        return Err(ApiError::Internal(e.to_string()));
+    }
 
     let _ = app
         .state_tx
