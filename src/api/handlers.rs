@@ -321,6 +321,12 @@ pub async fn light_on(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     } else {
         let lights = app.lights_for_room(&room_id);
+        if lights.is_empty() {
+            return Err(ApiError::Internal(format!(
+                "No lights resolved for '{}' — Z2M group not discovered yet?",
+                room_id
+            )));
+        }
         let mut failed = 0usize;
         for ieee in &lights {
             if let Err(e) = app
@@ -332,7 +338,7 @@ pub async fn light_on(
                 failed += 1;
             }
         }
-        if failed > 0 && failed == lights.len() {
+        if failed == lights.len() {
             return Err(ApiError::Internal(format!(
                 "Failed to publish to all {} lights in '{}'",
                 lights.len(),
@@ -596,19 +602,8 @@ pub async fn set_scene(
         }
     };
 
-    // Pause circadian
-    let _ = app
-        .state_tx
-        .send(StateCommand::UpdateRoomState {
-            room_id: room_id.to_string(),
-            update: RoomStateUpdate::CircadianPause {
-                paused: true,
-                until: None,
-            },
-        })
-        .await;
-
-    // Apply the scene via light_on logic
+    // Resolve the publish target BEFORE pausing circadian, so a room whose
+    // lights can't be resolved yet errors out without side effects.
     let ct_mired = (1_000_000u32 / color_temp_k as u32) as u16;
     let room_config = app.config.rooms.get(&room_id);
     let use_group = room_config
@@ -626,6 +621,30 @@ pub async fn set_scene(
                 Some(group_name.clone())
             }
         });
+    let lights = if use_group.is_none() {
+        let lights = app.lights_for_room(&room_id);
+        if lights.is_empty() {
+            return Err(ApiError::Internal(format!(
+                "No lights resolved for '{}' — Z2M group not discovered yet?",
+                room_id
+            )));
+        }
+        lights
+    } else {
+        Vec::new()
+    };
+
+    // Pause circadian
+    let _ = app
+        .state_tx
+        .send(StateCommand::UpdateRoomState {
+            room_id: room_id.to_string(),
+            update: RoomStateUpdate::CircadianPause {
+                paused: true,
+                until: None,
+            },
+        })
+        .await;
 
     if let Some(ref group) = use_group {
         app.publisher
@@ -633,7 +652,6 @@ pub async fn set_scene(
             .await
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     } else {
-        let lights = app.lights_for_room(&room_id);
         let mut failed = 0usize;
         for ieee in &lights {
             if let Err(e) = app
@@ -645,7 +663,7 @@ pub async fn set_scene(
                 failed += 1;
             }
         }
-        if failed > 0 && failed == lights.len() {
+        if failed == lights.len() {
             return Err(ApiError::Internal(format!(
                 "Failed to publish to all {} lights in '{}'",
                 lights.len(),

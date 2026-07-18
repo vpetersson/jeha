@@ -88,7 +88,8 @@ impl ConfigSync {
             .collect();
 
         // Find groups that have light members but aren't in config
-        let mut new_entries = Vec::new();
+        let mut new_entries: Vec<(String, String)> = Vec::new();
+        let mut new_ids_this_run: HashSet<String> = HashSet::new();
 
         for (group_name, group_info) in current_state.group_map.iter() {
             if known_groups.contains(group_name.as_str()) {
@@ -120,10 +121,18 @@ impl ConfigSync {
                 .filter(|c| c.is_alphanumeric() || *c == '_')
                 .collect::<String>();
 
-            // Skip if a room with this ID already exists (in config or
-            // appended earlier this session)
+            // Skip if a room with this ID already exists (in config,
+            // appended earlier this session, or added earlier in this run —
+            // distinct group names can normalize to the same room_id)
             if self.config.rooms.contains_key(&room_id) || self.appended_room_ids.contains(&room_id)
             {
+                continue;
+            }
+            if !new_ids_this_run.insert(room_id.clone()) {
+                warn!(
+                    "Skipping auto-discovery of group '{}': room_id '{}' collides with another new group",
+                    group_name, room_id
+                );
                 continue;
             }
 

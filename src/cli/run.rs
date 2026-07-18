@@ -106,6 +106,16 @@ pub async fn run_daemon(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
         }
+        // DevicesUpdated fires when the MQTT handler ENQUEUES the update;
+        // the StateManager applies it asynchronously. Wait until the device
+        // map is actually visible in shared state (bounded — an empty Z2M
+        // device list would legitimately never populate it).
+        for _ in 0..50 {
+            if !shared_state.load().device_map.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     })
     .await;
     if wait.is_err() {
