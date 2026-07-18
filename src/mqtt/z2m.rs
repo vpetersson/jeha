@@ -134,7 +134,7 @@ pub async fn handle_message(
         }
         _ if relative.ends_with("/availability") => {
             let device_name = relative.strip_suffix("/availability").unwrap();
-            handle_availability(device_name, payload, state, state_tx, event_bus).await?;
+            handle_availability(device_name, payload, state_tx).await?;
         }
         _ => {
             handle_device_state(
@@ -283,35 +283,22 @@ async fn handle_bridge_groups(
 async fn handle_availability(
     device_name: &str,
     payload: &Bytes,
-    state: &SharedState,
     state_tx: &mpsc::Sender<StateCommand>,
-    event_bus: &EventBus,
 ) -> Result<()> {
     let text = std::str::from_utf8(payload)?;
     let available = text.contains("online");
+    debug!("Device '{}': available={}", device_name, available);
 
-    // Always record availability — the StateManager resolves the friendly
-    // name itself and buffers reports that arrive before the device list.
+    // The StateManager resolves the friendly name, buffers reports that
+    // arrive before the device list, and publishes DeviceAvailabilityChanged
+    // AFTER the state update — so event subscribers never read stale
+    // availability from SharedState.
     let _ = state_tx
         .send(StateCommand::SetDeviceAvailability {
             friendly_name: device_name.to_string(),
             available,
         })
         .await;
-
-    let current = state.load();
-    if let Some(ieee) = current.friendly_to_ieee.get(device_name).cloned() {
-        debug!(
-            "Device '{}' ({}): available={}",
-            device_name, ieee, available
-        );
-        event_bus.publish(Event::DeviceAvailabilityChanged { ieee, available });
-    } else {
-        debug!(
-            "Availability for '{}' received before device list; buffered",
-            device_name
-        );
-    }
 
     Ok(())
 }

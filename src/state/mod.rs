@@ -233,14 +233,18 @@ pub enum RoomStateUpdate {
         ttl_secs: u64,
     },
     Illuminance(crate::event::Illuminance),
-    /// Restore a room to a previously captured snapshot. Used to roll back
-    /// an optimistic update when the corresponding MQTT publish fails.
-    Restore(Box<RoomState>),
+    /// Roll back the light-related fields of a room to a previously captured
+    /// snapshot after a failed MQTT publish. Only the fields the optimistic
+    /// LightsOn/LightsOff/LightsOnWithPush updates touch are restored, so
+    /// concurrent sensor updates (occupancy, motion, illuminance, night mode)
+    /// that landed during the publish attempt are preserved.
+    RestoreLights(Box<RoomState>),
 }
 
 pub struct StateManager {
     state: SharedState,
     rx: mpsc::Receiver<StateCommand>,
+    event_bus: crate::event::EventBus,
     /// Availability reports whose friendly name didn't resolve to a known
     /// device yet (retained availability can arrive before bridge/devices).
     /// Applied and drained on the next UpdateDevices.
@@ -248,12 +252,16 @@ pub struct StateManager {
 }
 
 impl StateManager {
-    pub fn new(state: SharedState) -> (Self, mpsc::Sender<StateCommand>) {
+    pub fn new(
+        state: SharedState,
+        event_bus: crate::event::EventBus,
+    ) -> (Self, mpsc::Sender<StateCommand>) {
         let (tx, rx) = mpsc::channel(256);
         (
             Self {
                 state,
                 rx,
+                event_bus,
                 pending_availability: HashMap::new(),
             },
             tx,
@@ -263,6 +271,10 @@ impl StateManager {
     pub async fn run(mut self) {
         while let Some(cmd) = self.rx.recv().await {
             let mut current = (**self.state.load()).clone();
+            // Availability events are published AFTER the store below, so
+            // subscribers that consult SharedState (e.g. circadian's
+            // per-device re-push) never observe stale availability.
+            let mut availability_events: Vec<crate::event::Event> = Vec::new();
             match cmd {
                 StateCommand::UpdateDevices(devices) => {
                     let friendly_to_ieee: HashMap<String, String> = devices
@@ -281,6 +293,12 @@ impl StateManager {
                     self.pending_availability.retain(|friendly, avail| {
                         if let Some(ieee) = friendly_to_ieee.get(friendly) {
                             availability.insert(ieee.clone(), *avail);
+                            availability_events.push(
+                                crate::event::Event::DeviceAvailabilityChanged {
+                                    ieee: ieee.clone(),
+                                    available: *avail,
+                                },
+                            );
                             false
                         } else {
                             true
@@ -300,6 +318,10 @@ impl StateManager {
                 } => {
                     if let Some(ieee) = current.friendly_to_ieee.get(&friendly_name) {
                         Arc::make_mut(&mut current.availability).insert(ieee.clone(), available);
+                        availability_events.push(crate::event::Event::DeviceAvailabilityChanged {
+                            ieee: ieee.clone(),
+                            available,
+                        });
                     } else {
                         tracing::debug!(
                             "Availability for unknown device '{}' buffered until device list arrives",
@@ -392,8 +414,16 @@ impl StateManager {
                         RoomStateUpdate::Illuminance(val) => {
                             room.last_illuminance = Some(val);
                         }
-                        RoomStateUpdate::Restore(snapshot) => {
-                            *room = *snapshot;
+                        RoomStateUpdate::RestoreLights(snapshot) => {
+                            room.lights_on = snapshot.lights_on;
+                            room.current_brightness = snapshot.current_brightness;
+                            room.current_color_temp_mired = snapshot.current_color_temp_mired;
+                            room.update_source = snapshot.update_source;
+                            room.intended_brightness = snapshot.intended_brightness;
+                            room.intended_color_temp_mired = snapshot.intended_color_temp_mired;
+                            room.last_jeha_push = snapshot.last_jeha_push;
+                            room.circadian_paused = snapshot.circadian_paused;
+                            room.circadian_paused_until = snapshot.circadian_paused_until;
                         }
                     }
                 }
@@ -405,6 +435,9 @@ impl StateManager {
                 }
             }
             self.state.store(Arc::new(current));
+            for event in availability_events {
+                self.event_bus.publish(event);
+            }
         }
     }
 }
@@ -440,7 +473,9 @@ mod tests {
     #[tokio::test]
     async fn test_availability_buffered_until_device_list() {
         let state = new_shared_state();
-        let (manager, tx) = StateManager::new(state.clone());
+        let event_bus = crate::event::EventBus::new(16);
+        let mut event_rx = event_bus.subscribe();
+        let (manager, tx) = StateManager::new(state.clone(), event_bus);
         tokio::spawn(manager.run());
 
         // Retained availability can arrive before the first bridge/devices
@@ -461,12 +496,26 @@ mod tests {
         assert!(!current.is_device_available("0xAA"));
         // Unknown devices default to available
         assert!(current.is_device_available("0xBB"));
+
+        // The buffered report's event fires once resolved — and only after
+        // the state was stored, so handlers reading state see fresh data.
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("no availability event within 1s")
+            .unwrap();
+        match event {
+            crate::event::Event::DeviceAvailabilityChanged { ieee, available } => {
+                assert_eq!(ieee, "0xAA");
+                assert!(!available);
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
     }
 
     #[tokio::test]
     async fn test_availability_pruned_for_removed_devices() {
         let state = new_shared_state();
-        let (manager, tx) = StateManager::new(state.clone());
+        let (manager, tx) = StateManager::new(state.clone(), crate::event::EventBus::new(16));
         tokio::spawn(manager.run());
 
         let mut devices = HashMap::new();

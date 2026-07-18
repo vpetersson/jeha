@@ -22,13 +22,15 @@ fn snapshot_room(publisher: &Publisher, room_id: &str) -> RoomState {
         .unwrap_or_default()
 }
 
-/// Roll back a failed optimistic update. Best-effort: a Z2M echo that raced
-/// in between is overwritten, but the next real state message corrects it.
+/// Roll back the light-related fields of a failed optimistic update.
+/// Sensor data (occupancy, motion, illuminance, night mode) that changed
+/// during the publish attempt is preserved; a Z2M echo that raced in on the
+/// light fields is overwritten, but the next real state message corrects it.
 async fn rollback_room(state_tx: &mpsc::Sender<StateCommand>, room_id: &str, prior: RoomState) {
     let _ = state_tx
         .send(StateCommand::UpdateRoomState {
             room_id: room_id.to_string(),
-            update: RoomStateUpdate::Restore(Box::new(prior)),
+            update: RoomStateUpdate::RestoreLights(Box::new(prior)),
         })
         .await;
 }

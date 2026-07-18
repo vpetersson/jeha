@@ -49,9 +49,12 @@ pub async fn run_daemon(
         app_config.automations.len()
     );
 
-    // Set up shared state
+    // Set up event bus + shared state (the state manager publishes
+    // availability events after applying state, so it needs the bus)
+    let event_bus = EventBus::new(256);
     let shared_state = state::new_shared_state();
-    let (state_manager, state_tx) = state::StateManager::new(shared_state.clone());
+    let (state_manager, state_tx) =
+        state::StateManager::new(shared_state.clone(), event_bus.clone());
 
     // Set start time and initialize room states
     {
@@ -66,7 +69,6 @@ pub async fn run_daemon(
     // Start state manager
     tokio::spawn(state_manager.run());
 
-    let event_bus = EventBus::new(256);
     let cancel = CancellationToken::new();
 
     // 2. Connect MQTT
