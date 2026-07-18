@@ -61,6 +61,64 @@ struct Z2mSceneRaw {
     name: String,
 }
 
+/// Precomputed room lookups derived from the (immutable) config, so the
+/// per-message hot path avoids iterating all rooms for every MQTT publish.
+pub struct RoomLookup {
+    /// Z2M group friendly name -> room_id (rooms configured with z2m_group).
+    group_to_room: HashMap<String, String>,
+    /// Light IEEE -> room_id (rooms configured with explicit lights, no group).
+    ieee_to_room: HashMap<String, String>,
+    /// Motion sensor IEEE -> room_ids using that sensor.
+    sensor_rooms: HashMap<String, Vec<String>>,
+}
+
+impl RoomLookup {
+    pub fn from_config(config: &AppConfig) -> Self {
+        let mut group_to_room = HashMap::new();
+        let mut ieee_to_room = HashMap::new();
+        let mut sensor_rooms: HashMap<String, Vec<String>> = HashMap::new();
+        for (room_id, rc) in &config.rooms {
+            if let Some(ref group) = rc.z2m_group {
+                if let Some(prev) = group_to_room.insert(group.clone(), room_id.clone()) {
+                    tracing::warn!(
+                        "Z2M group '{}' is referenced by both room '{}' and room '{}'; \
+                         group state will be attributed to '{}'",
+                        group,
+                        prev,
+                        room_id,
+                        room_id
+                    );
+                }
+            } else {
+                for ieee in &rc.lights {
+                    if let Some(prev) = ieee_to_room.insert(ieee.clone(), room_id.clone()) {
+                        tracing::warn!(
+                            "Light {} is listed in both room '{}' and room '{}'; \
+                             its state will be attributed to '{}'",
+                            ieee,
+                            prev,
+                            room_id,
+                            room_id
+                        );
+                    }
+                }
+            }
+            if let Some(ref sensor) = rc.motion_sensor {
+                sensor_rooms
+                    .entry(sensor.clone())
+                    .or_default()
+                    .push(room_id.clone());
+            }
+        }
+        Self {
+            group_to_room,
+            ieee_to_room,
+            sensor_rooms,
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_message(
     topic: &str,
     payload: &Bytes,
@@ -69,6 +127,7 @@ pub async fn handle_message(
     state_tx: &mpsc::Sender<StateCommand>,
     event_bus: &EventBus,
     config: &AppConfig,
+    lookup: &RoomLookup,
 ) -> Result<()> {
     let relative = topic
         .strip_prefix(base_topic)
@@ -93,10 +152,13 @@ pub async fn handle_message(
         }
         _ if relative.ends_with("/availability") => {
             let device_name = relative.strip_suffix("/availability").unwrap();
-            handle_availability(device_name, payload, state, event_bus)?;
+            handle_availability(device_name, payload, state_tx).await?;
         }
         _ => {
-            handle_device_state(relative, payload, state, state_tx, event_bus, config).await?;
+            handle_device_state(
+                relative, payload, state, state_tx, event_bus, config, lookup,
+            )
+            .await?;
         }
     }
 
@@ -117,7 +179,6 @@ async fn handle_bridge_devices(
             ieee_address: device.ieee_address.clone(),
             friendly_name: device.friendly_name,
             supported: device.supported.unwrap_or(true),
-            available: true,
             supports_brightness: false,
             supports_color_temp: false,
             color_temp_min: None,
@@ -237,33 +298,30 @@ async fn handle_bridge_groups(
     Ok(())
 }
 
-fn handle_availability(
+async fn handle_availability(
     device_name: &str,
     payload: &Bytes,
-    state: &SharedState,
-    event_bus: &EventBus,
+    state_tx: &mpsc::Sender<StateCommand>,
 ) -> Result<()> {
     let text = std::str::from_utf8(payload)?;
     let available = text.contains("online");
+    debug!("Device '{}': available={}", device_name, available);
 
-    let current = state.load();
-    let ieee = current
-        .device_map
-        .values()
-        .find(|d| d.friendly_name == device_name)
-        .map(|d| d.ieee_address.clone());
-
-    if let Some(ieee) = ieee {
-        debug!(
-            "Device '{}' ({}): available={}",
-            device_name, ieee, available
-        );
-        event_bus.publish(Event::DeviceAvailabilityChanged { ieee, available });
-    }
+    // The StateManager resolves the friendly name, buffers reports that
+    // arrive before the device list, and publishes DeviceAvailabilityChanged
+    // AFTER the state update — so event subscribers never read stale
+    // availability from SharedState.
+    let _ = state_tx
+        .send(StateCommand::SetDeviceAvailability {
+            friendly_name: device_name.to_string(),
+            available,
+        })
+        .await;
 
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_device_state(
     relative_topic: &str,
     payload: &Bytes,
@@ -271,6 +329,7 @@ async fn handle_device_state(
     state_tx: &mpsc::Sender<StateCommand>,
     event_bus: &EventBus,
     config: &AppConfig,
+    lookup: &RoomLookup,
 ) -> Result<()> {
     let device_name = relative_topic;
 
@@ -279,69 +338,57 @@ async fn handle_device_state(
     };
 
     let current = state.load();
+    let device_ieee = current.friendly_to_ieee.get(device_name);
 
     // Check if this is a remote action
     if let Some(action) = msg.get("action").and_then(|v| v.as_str())
         && !action.is_empty()
+        && let Some(ieee) = device_ieee
     {
-        let ieee = current
-            .device_map
-            .values()
-            .find(|d| d.friendly_name == device_name)
-            .map(|d| d.ieee_address.clone());
-
-        if let Some(ieee) = ieee {
-            debug!("Remote action '{}' from '{}'", action, device_name);
-            event_bus.publish(Event::RemoteAction {
-                remote_ieee: ieee,
-                action: action.to_string(),
-            });
-        }
+        debug!("Remote action '{}' from '{}'", action, device_name);
+        event_bus.publish(Event::RemoteAction {
+            remote_ieee: ieee.clone(),
+            action: action.to_string(),
+        });
     }
 
     // Check if this is a motion sensor update
-    if let Some(occupancy) = msg.get("occupancy").and_then(|v| v.as_bool()) {
-        let ieee = current
-            .device_map
-            .values()
-            .find(|d| d.friendly_name == device_name)
-            .map(|d| d.ieee_address.clone());
+    if let Some(occupancy) = msg.get("occupancy").and_then(|v| v.as_bool())
+        && let Some(ieee) = device_ieee.cloned()
+    {
+        let illuminance = if let Some(lux) = msg.get("illuminance").and_then(|v| v.as_u64()) {
+            Some(Illuminance::Lux(lux as u16))
+        } else {
+            msg.get("illuminance_above_threshold")
+                .and_then(|v| v.as_bool())
+                .map(Illuminance::AboveThreshold)
+        };
 
-        if let Some(ieee) = ieee {
-            let illuminance = if let Some(lux) = msg.get("illuminance").and_then(|v| v.as_u64()) {
-                Some(Illuminance::Lux(lux as u16))
-            } else {
-                msg.get("illuminance_above_threshold")
-                    .and_then(|v| v.as_bool())
-                    .map(Illuminance::AboveThreshold)
-            };
-
-            // Persist illuminance to room state for observability
-            if let Some(ref illum) = illuminance {
-                for (room_id, rc) in &config.rooms {
-                    if rc.motion_sensor.as_deref() == Some(ieee.as_str()) {
-                        let _ = state_tx
-                            .send(StateCommand::UpdateRoomState {
-                                room_id: room_id.clone(),
-                                update: RoomStateUpdate::Illuminance(illum.clone()),
-                            })
-                            .await;
-                    }
-                }
+        // Persist illuminance to room state for observability
+        if let Some(ref illum) = illuminance
+            && let Some(room_ids) = lookup.sensor_rooms.get(&ieee)
+        {
+            for room_id in room_ids {
+                let _ = state_tx
+                    .send(StateCommand::UpdateRoomState {
+                        room_id: room_id.clone(),
+                        update: RoomStateUpdate::Illuminance(illum.clone()),
+                    })
+                    .await;
             }
+        }
 
-            if occupancy {
-                event_bus.publish(Event::MotionDetected {
-                    room_id: String::new(),
-                    sensor_ieee: ieee,
-                    illuminance,
-                });
-            } else {
-                event_bus.publish(Event::MotionCleared {
-                    room_id: String::new(),
-                    sensor_ieee: ieee,
-                });
-            }
+        if occupancy {
+            event_bus.publish(Event::MotionDetected {
+                room_id: String::new(),
+                sensor_ieee: ieee,
+                illuminance,
+            });
+        } else {
+            event_bus.publish(Event::MotionCleared {
+                room_id: String::new(),
+                sensor_ieee: ieee,
+            });
         }
     }
 
@@ -353,7 +400,7 @@ async fn handle_device_state(
     let is_off = state_str.is_some_and(|s| s == "OFF");
 
     if (is_on || is_off)
-        && let Some(room_id) = find_room_for_device(device_name, &current, config)
+        && let Some(room_id) = find_room_for_device(device_name, &current, lookup)
     {
         if is_on {
             let brightness = has_brightness.map(|b| b as u8);
@@ -386,7 +433,7 @@ async fn handle_device_state(
 
     if is_on
         && (has_brightness.is_some() || has_color_temp.is_some())
-        && let Some(room_id) = find_room_for_device(device_name, &current, config)
+        && let Some(room_id) = find_room_for_device(device_name, &current, lookup)
         && let Some(room_state) = current.rooms.get(&room_id)
         // Only check if circadian is actively managing this room
         && room_state.lights_on
@@ -485,37 +532,22 @@ async fn handle_device_state(
 }
 
 /// Find which room a device (by friendly name) belongs to.
-/// Checks Z2M group membership and direct light IEEE matches.
+/// Rooms with a Z2M group only match the group topic (avoids processing
+/// duplicate state from individual device topics); rooms with explicit
+/// lights match the individual device by IEEE.
 fn find_room_for_device(
     device_name: &str,
     system_state: &crate::state::SystemState,
-    config: &AppConfig,
+    lookup: &RoomLookup,
 ) -> Option<String> {
-    // Find the device's IEEE address from friendly name
-    let ieee = system_state
-        .device_map
-        .values()
-        .find(|d| d.friendly_name == device_name)
-        .map(|d| d.ieee_address.as_str());
-
-    for (room_id, room_config) in &config.rooms {
-        if let Some(ref group_name) = room_config.z2m_group {
-            // Room uses a Z2M group: only match the group topic to avoid
-            // processing duplicate state from individual device topics.
-            if device_name == group_name {
-                return Some(room_id.clone());
-            }
-        } else {
-            // No group configured: match individual device by IEEE
-            if let Some(ieee) = ieee
-                && room_config.lights.iter().any(|l| l == ieee)
-            {
-                return Some(room_id.clone());
-            }
-        }
+    if let Some(room_id) = lookup.group_to_room.get(device_name) {
+        return Some(room_id.clone());
     }
-
-    None
+    system_state
+        .friendly_to_ieee
+        .get(device_name)
+        .and_then(|ieee| lookup.ieee_to_room.get(ieee))
+        .cloned()
 }
 
 pub fn resolve_topic(state: &SharedState, ieee: &str, base_topic: &str) -> Option<String> {
@@ -524,4 +556,49 @@ pub fn resolve_topic(state: &SharedState, ieee: &str, base_topic: &str) -> Optio
         .device_map
         .get(ieee)
         .map(|d| format!("{}/{}", base_topic, d.friendly_name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_room_lookup_from_config() {
+        let toml_str = r#"
+schema_version = 1
+
+[rooms.kitchen]
+z2m_group = "Kitchen"
+motion_sensor = "0x00158d000aaaaaaa"
+
+[rooms.office]
+lights = ["0x001788010aaaaaa1", "0x001788010aaaaaa2"]
+motion_sensor = "0x00158d000aaaaaaa"
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let lookup = RoomLookup::from_config(&config);
+
+        // Group-based room matches by group name only, not by member IEEE
+        assert_eq!(lookup.group_to_room.get("Kitchen").unwrap(), "kitchen");
+        assert!(!lookup.group_to_room.contains_key("Office"));
+
+        // Light-based room matches by IEEE
+        assert_eq!(
+            lookup.ieee_to_room.get("0x001788010aaaaaa1").unwrap(),
+            "office"
+        );
+        assert_eq!(
+            lookup.ieee_to_room.get("0x001788010aaaaaa2").unwrap(),
+            "office"
+        );
+
+        // A sensor shared by two rooms maps to both
+        let mut rooms = lookup
+            .sensor_rooms
+            .get("0x00158d000aaaaaaa")
+            .unwrap()
+            .clone();
+        rooms.sort();
+        assert_eq!(rooms, vec!["kitchen", "office"]);
+    }
 }

@@ -72,9 +72,16 @@ impl MqttHandle {
     pub async fn run(mut self) {
         let base_topic = self.config.base_topic.clone();
         let client = self.client.clone();
+        let room_lookup = z2m::RoomLookup::from_config(&self.app_config);
+
+        const RECONNECT_DELAY_MIN: Duration = Duration::from_secs(1);
+        const RECONNECT_DELAY_MAX: Duration = Duration::from_secs(60);
+        let mut reconnect_delay = RECONNECT_DELAY_MIN;
+
         loop {
             match self.event_loop.poll().await {
                 Ok(event) => {
+                    reconnect_delay = RECONNECT_DELAY_MIN;
                     if let Event::Incoming(Packet::Publish(publish)) = event {
                         debug!("MQTT message on topic: {}", publish.topic);
                         if let Err(e) = z2m::handle_message(
@@ -85,6 +92,7 @@ impl MqttHandle {
                             &self.state_tx,
                             &self.event_bus,
                             &self.app_config,
+                            &room_lookup,
                         )
                         .await
                         {
@@ -97,19 +105,31 @@ impl MqttHandle {
                             .state_tx
                             .send(StateCommand::SetMqttConnected(true))
                             .await;
-                        if let Err(e) = Self::subscribe_z2m(&client, &base_topic).await {
-                            error!("Failed to subscribe to Z2M topics: {}", e);
-                        }
+                        // Subscribe from a separate task: the client's request
+                        // channel may be full of publishes queued during an
+                        // outage, and it only drains via poll() in THIS task —
+                        // awaiting subscribe() here would deadlock the loop.
+                        let sub_client = client.clone();
+                        let sub_topic = base_topic.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = Self::subscribe_z2m(&sub_client, &sub_topic).await {
+                                error!("Failed to subscribe to Z2M topics: {}", e);
+                            }
+                        });
                     }
                 }
                 Err(e) => {
-                    warn!("MQTT connection error: {}. Reconnecting...", e);
+                    warn!(
+                        "MQTT connection error: {}. Reconnecting in {:?}...",
+                        e, reconnect_delay
+                    );
                     self.event_bus.publish(event::Event::MqttDisconnected);
                     let _ = self
                         .state_tx
                         .send(StateCommand::SetMqttConnected(false))
                         .await;
-                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    tokio::time::sleep(reconnect_delay).await;
+                    reconnect_delay = (reconnect_delay * 2).min(RECONNECT_DELAY_MAX);
                 }
             }
         }

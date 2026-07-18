@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use chrono::{Datelike, Utc};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
@@ -72,16 +71,16 @@ impl LightsOutTask {
 
                     if !already_fired && now_minutes == target_minutes {
                         last_fired_date = Some(today);
-                        if let Err(e) = self.turn_off_all().await {
-                            warn!("Lights-out failed: {}", e);
-                        }
+                        self.turn_off_all().await;
                     }
                 }
             }
         }
     }
 
-    async fn turn_off_all(&self) -> Result<()> {
+    /// Turn off all lights-out rooms. Failures are logged per room so one
+    /// failed publish can't prevent the remaining rooms from turning off.
+    async fn turn_off_all(&self) {
         let current = self.state.load();
 
         for (room_id, room_config) in &self.config.rooms {
@@ -103,10 +102,18 @@ impl LightsOutTask {
             info!("Lights-out: turning off '{}'", room_id);
 
             if let Some(ref group) = room_config.z2m_group {
-                self.publisher.turn_off_group(group, Some(5)).await?;
+                if let Err(e) = self.publisher.turn_off_group(group, Some(5)).await {
+                    warn!("Lights-out failed for room '{}': {}", room_id, e);
+                    continue;
+                }
             } else {
                 for ieee in &room_config.lights {
-                    let _ = self.publisher.turn_off_ieee(ieee, Some(5)).await;
+                    if let Err(e) = self.publisher.turn_off_ieee(ieee, Some(5)).await {
+                        warn!(
+                            "Lights-out failed for device {} in '{}': {}",
+                            ieee, room_id, e
+                        );
+                    }
                 }
             }
 
@@ -120,6 +127,5 @@ impl LightsOutTask {
         }
 
         info!("Lights-out complete");
-        Ok(())
     }
 }

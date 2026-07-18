@@ -321,11 +321,29 @@ pub async fn light_on(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     } else {
         let lights = app.lights_for_room(&room_id);
+        if lights.is_empty() {
+            return Err(ApiError::Internal(format!(
+                "No lights resolved for '{}' — Z2M group not discovered yet?",
+                room_id
+            )));
+        }
+        let mut failed = 0usize;
         for ieee in &lights {
-            let _ = app
+            if let Err(e) = app
                 .publisher
                 .turn_on_ieee(ieee, body.brightness, ct_mired, body.transition)
-                .await;
+                .await
+            {
+                tracing::warn!("light_on: publish to {} failed: {}", ieee, e);
+                failed += 1;
+            }
+        }
+        if failed == lights.len() {
+            return Err(ApiError::Internal(format!(
+                "Failed to publish to all {} lights in '{}'",
+                lights.len(),
+                room_id
+            )));
         }
     }
 
@@ -420,8 +438,19 @@ pub async fn light_off(
             .get(&room_id)
             .map(|r| r.lights.clone())
             .unwrap_or_default();
+        let mut failed = 0usize;
         for ieee in &lights {
-            let _ = app.publisher.turn_off_ieee(ieee, body.transition).await;
+            if let Err(e) = app.publisher.turn_off_ieee(ieee, body.transition).await {
+                tracing::warn!("light_off: publish to {} failed: {}", ieee, e);
+                failed += 1;
+            }
+        }
+        if failed > 0 && failed == lights.len() {
+            return Err(ApiError::Internal(format!(
+                "Failed to publish to all {} lights in '{}'",
+                lights.len(),
+                room_id
+            )));
         }
     }
 
@@ -573,19 +602,8 @@ pub async fn set_scene(
         }
     };
 
-    // Pause circadian
-    let _ = app
-        .state_tx
-        .send(StateCommand::UpdateRoomState {
-            room_id: room_id.to_string(),
-            update: RoomStateUpdate::CircadianPause {
-                paused: true,
-                until: None,
-            },
-        })
-        .await;
-
-    // Apply the scene via light_on logic
+    // Resolve the publish target BEFORE pausing circadian, so a room whose
+    // lights can't be resolved yet errors out without side effects.
     let ct_mired = (1_000_000u32 / color_temp_k as u32) as u16;
     let room_config = app.config.rooms.get(&room_id);
     let use_group = room_config
@@ -603,20 +621,80 @@ pub async fn set_scene(
                 Some(group_name.clone())
             }
         });
+    let lights = if use_group.is_none() {
+        let lights = app.lights_for_room(&room_id);
+        if lights.is_empty() {
+            return Err(ApiError::Internal(format!(
+                "No lights resolved for '{}' — Z2M group not discovered yet?",
+                room_id
+            )));
+        }
+        lights
+    } else {
+        Vec::new()
+    };
 
-    if let Some(ref group) = use_group {
+    // Pause circadian before publishing so a circadian tick can't race the
+    // scene. Snapshot the prior pause state first: if the publish fails we
+    // roll the pause back so a failed call leaves no side effects.
+    let prior_pause = {
+        let current = app.state.load();
+        current
+            .rooms
+            .get(&room_id)
+            .map(|rs| (rs.circadian_paused, rs.circadian_paused_until))
+            .unwrap_or((false, None))
+    };
+    let _ = app
+        .state_tx
+        .send(StateCommand::UpdateRoomState {
+            room_id: room_id.to_string(),
+            update: RoomStateUpdate::CircadianPause {
+                paused: true,
+                until: None,
+            },
+        })
+        .await;
+
+    let publish_result: Result<(), String> = if let Some(ref group) = use_group {
         app.publisher
             .turn_on_group(group, Some(brightness), Some(ct_mired), Some(3))
             .await
-            .map_err(|e| ApiError::Internal(e.to_string()))?;
+            .map_err(|e| e.to_string())
     } else {
-        let lights = app.lights_for_room(&room_id);
+        let mut failed = 0usize;
         for ieee in &lights {
-            let _ = app
+            if let Err(e) = app
                 .publisher
                 .turn_on_ieee(ieee, Some(brightness), Some(ct_mired), Some(3))
-                .await;
+                .await
+            {
+                tracing::warn!("set_scene: publish to {} failed: {}", ieee, e);
+                failed += 1;
+            }
         }
+        if failed == lights.len() {
+            Err(format!(
+                "Failed to publish to all {} lights in '{}'",
+                lights.len(),
+                room_id
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    if let Err(e) = publish_result {
+        let _ = app
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::CircadianPause {
+                    paused: prior_pause.0,
+                    until: prior_pause.1,
+                },
+            })
+            .await;
+        return Err(ApiError::Internal(e));
     }
 
     let _ = app
@@ -770,6 +848,16 @@ pub async fn recall_z2m_scene(
         )));
     }
 
+    // Snapshot the room before mutating, so a failed publish rolls back the
+    // pause / Manual source / override TTL instead of leaving them applied.
+    let prior = app
+        .state
+        .load()
+        .rooms
+        .get(&room_id)
+        .cloned()
+        .unwrap_or_default();
+
     // Pause circadian
     let _ = app
         .state_tx
@@ -805,10 +893,31 @@ pub async fn recall_z2m_scene(
         })
         .await;
 
-    app.publisher
+    if let Err(e) = app
+        .publisher
         .recall_scene_group(group_name, body.scene_id)
         .await
-        .map_err(|e| ApiError::Internal(e.to_string()))?;
+    {
+        // Restore the TTL first so RestoreLights sees an unchanged
+        // manual_override_until and restores update_source too.
+        let _ = app
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::ManualOverrideTtl {
+                    until: prior.manual_override_until,
+                },
+            })
+            .await;
+        let _ = app
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::RestoreLights(Box::new(prior)),
+            })
+            .await;
+        return Err(ApiError::Internal(e.to_string()));
+    }
 
     let _ = app
         .state_tx

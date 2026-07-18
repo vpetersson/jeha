@@ -8,7 +8,32 @@ use tracing::debug;
 use crate::circadian::CircadianEngine;
 use crate::config::types::{ActionConfig, RoomConfig};
 use crate::mqtt::publish::Publisher;
-use crate::state::{RoomStateUpdate, StateCommand, UpdateSource};
+use crate::state::{RoomState, RoomStateUpdate, StateCommand, UpdateSource};
+
+/// Snapshot the room's state so an optimistic update can be rolled back
+/// if the MQTT publish fails.
+fn snapshot_room(publisher: &Publisher, room_id: &str) -> RoomState {
+    publisher
+        .state_handle()
+        .load()
+        .rooms
+        .get(room_id)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Roll back the light-related fields of a failed optimistic update.
+/// Sensor data (occupancy, motion, illuminance, night mode) that changed
+/// during the publish attempt is preserved; a Z2M echo that raced in on the
+/// light fields is overwritten, but the next real state message corrects it.
+async fn rollback_room(state_tx: &mpsc::Sender<StateCommand>, room_id: &str, prior: RoomState) {
+    let _ = state_tx
+        .send(StateCommand::UpdateRoomState {
+            room_id: room_id.to_string(),
+            update: RoomStateUpdate::RestoreLights(Box::new(prior)),
+        })
+        .await;
+}
 
 pub async fn execute_action(
     action: &ActionConfig,
@@ -47,6 +72,7 @@ pub async fn execute_action(
             let trans = transition.or(Some(3));
 
             // Update state BEFORE MQTT publish so other tasks see lights_on=true immediately
+            let prior = snapshot_room(publisher, room_id);
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
@@ -58,12 +84,16 @@ pub async fn execute_action(
                 })
                 .await;
 
-            if let Some(ref group) = room_config.z2m_group {
+            let publish_result = if let Some(ref group) = room_config.z2m_group {
                 publisher
                     .turn_on_group(group, Some(bright), ct_mired, trans)
-                    .await?;
+                    .await
             } else {
-                publish_on_all(room_config, publisher, Some(bright), ct_mired, trans).await?;
+                publish_on_all(room_config, publisher, Some(bright), ct_mired, trans).await
+            };
+            if let Err(e) = publish_result {
+                rollback_room(state_tx, room_id, prior).await;
+                return Err(e);
             }
 
             debug!("Lights ON in room '{}': brightness={}", room_id, bright);
@@ -84,6 +114,7 @@ pub async fn execute_action(
             let trans = transition.or(Some(3));
 
             // Update state BEFORE MQTT publish
+            let prior = snapshot_room(publisher, room_id);
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
@@ -91,10 +122,14 @@ pub async fn execute_action(
                 })
                 .await;
 
-            if let Some(ref group) = room_config.z2m_group {
-                publisher.turn_off_group_with_members(group, trans).await?;
+            let publish_result = if let Some(ref group) = room_config.z2m_group {
+                publisher.turn_off_group_with_members(group, trans).await
             } else {
-                publish_off_all(room_config, publisher, trans).await?;
+                publish_off_all(room_config, publisher, trans).await
+            };
+            if let Err(e) = publish_result {
+                rollback_room(state_tx, room_id, prior).await;
+                return Err(e);
             }
 
             debug!("Lights OFF in room '{}'", room_id);
@@ -107,6 +142,7 @@ pub async fn execute_action(
             let trans = transition.or(Some(3));
 
             // Update state BEFORE MQTT publish
+            let prior = snapshot_room(publisher, room_id);
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
@@ -118,12 +154,16 @@ pub async fn execute_action(
                 })
                 .await;
 
-            if let Some(ref group) = room_config.z2m_group {
+            let publish_result = if let Some(ref group) = room_config.z2m_group {
                 publisher
                     .turn_on_group(group, Some(*brightness), None, trans)
-                    .await?;
+                    .await
             } else {
-                publish_on_all(room_config, publisher, Some(*brightness), None, trans).await?;
+                publish_on_all(room_config, publisher, Some(*brightness), None, trans).await
+            };
+            if let Err(e) = publish_result {
+                rollback_room(state_tx, room_id, prior).await;
+                return Err(e);
             }
 
             debug!("Set brightness {} in room '{}'", brightness, room_id);
@@ -137,6 +177,7 @@ pub async fn execute_action(
             let trans = transition.or(Some(3));
 
             // Update state BEFORE MQTT publish
+            let prior = snapshot_room(publisher, room_id);
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
@@ -148,12 +189,16 @@ pub async fn execute_action(
                 })
                 .await;
 
-            if let Some(ref group) = room_config.z2m_group {
+            let publish_result = if let Some(ref group) = room_config.z2m_group {
                 publisher
                     .turn_on_group(group, None, Some(ct_mired), trans)
-                    .await?;
+                    .await
             } else {
-                publish_on_all(room_config, publisher, None, Some(ct_mired), trans).await?;
+                publish_on_all(room_config, publisher, None, Some(ct_mired), trans).await
+            };
+            if let Err(e) = publish_result {
+                rollback_room(state_tx, room_id, prior).await;
+                return Err(e);
             }
 
             debug!(

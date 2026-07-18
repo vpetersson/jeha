@@ -1,6 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rumqttc::{AsyncClient, QoS};
 use serde_json::json;
 use tracing::{debug, warn};
@@ -8,6 +9,11 @@ use tracing::{debug, warn};
 use crate::calibration;
 use crate::config::types::AppConfig;
 use crate::state::SharedState;
+
+/// Upper bound on how long a publish may wait for space in the client's
+/// request queue. The queue only backs up when the broker is down; failing
+/// fast keeps engine loops responsive instead of blocking indefinitely.
+const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct Publisher {
     client: AsyncClient,
@@ -31,6 +37,22 @@ impl Publisher {
         }
     }
 
+    /// Shared-state handle, for callers that need a snapshot around a publish
+    /// (e.g. to roll back optimistic room-state updates on failure).
+    pub fn state_handle(&self) -> &SharedState {
+        &self.state
+    }
+
+    async fn publish_raw(&self, topic: &str, data: Vec<u8>) -> Result<()> {
+        tokio::time::timeout(
+            PUBLISH_TIMEOUT,
+            self.client.publish(topic, QoS::AtLeastOnce, false, data),
+        )
+        .await
+        .with_context(|| format!("publish to '{}' timed out (request queue full)", topic))??;
+        Ok(())
+    }
+
     pub async fn set_light_group(
         &self,
         group_name: &str,
@@ -39,10 +61,7 @@ impl Publisher {
         let topic = format!("{}/{}/set", self.base_topic, group_name);
         let data = serde_json::to_vec(payload)?;
         debug!("Publishing to {}: {}", topic, payload);
-        self.client
-            .publish(&topic, QoS::AtLeastOnce, false, data)
-            .await?;
-        Ok(())
+        self.publish_raw(&topic, data).await
     }
 
     pub async fn set_light_ieee(&self, ieee: &str, payload: &serde_json::Value) -> Result<()> {
@@ -63,10 +82,7 @@ impl Publisher {
                 let topic = format!("{}/{}/set", self.base_topic, device.friendly_name);
                 let data = serde_json::to_vec(payload)?;
                 debug!("Publishing to {}: {}", topic, payload);
-                self.client
-                    .publish(&topic, QoS::AtLeastOnce, false, data)
-                    .await?;
-                Ok(())
+                self.publish_raw(&topic, data).await
             }
             None => {
                 warn!("Cannot resolve IEEE {} to friendly name", ieee);
@@ -177,6 +193,12 @@ impl Publisher {
         transition: u32,
     ) -> Result<()> {
         let current = self.state.load();
+        // Skip devices reported offline by Z2M availability — the circadian
+        // engine re-pushes on DeviceAvailabilityChanged when they return.
+        if !current.is_device_available(ieee) {
+            debug!("Skipping circadian push to offline device {}", ieee);
+            return Ok(());
+        }
         let cal = calibration::resolve_for_device(ieee, &self.config, &current.device_map);
         let device_info = current.device_map.get(ieee);
 
