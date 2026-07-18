@@ -287,7 +287,7 @@ impl StateManager {
                     let mut availability: HashMap<String, bool> = current
                         .availability
                         .iter()
-                        .filter(|(ieee, _)| devices.contains_key(*ieee))
+                        .filter(|(ieee, _)| devices.contains_key(ieee.as_str()))
                         .map(|(ieee, avail)| (ieee.clone(), *avail))
                         .collect();
                     self.pending_availability.retain(|friendly, avail| {
