@@ -418,7 +418,13 @@ impl StateManager {
                             room.lights_on = snapshot.lights_on;
                             room.current_brightness = snapshot.current_brightness;
                             room.current_color_temp_mired = snapshot.current_color_temp_mired;
-                            room.update_source = snapshot.update_source;
+                            // A changed manual_override_until means a concurrent
+                            // manual-override update (e.g. ExternalChange) landed
+                            // during the failed publish; keep its update_source so
+                            // is_manual_override_active() still honors the TTL.
+                            if room.manual_override_until == snapshot.manual_override_until {
+                                room.update_source = snapshot.update_source;
+                            }
                             room.intended_brightness = snapshot.intended_brightness;
                             room.intended_color_temp_mired = snapshot.intended_color_temp_mired;
                             room.last_jeha_push = snapshot.last_jeha_push;
@@ -510,6 +516,58 @@ mod tests {
             }
             other => panic!("unexpected event: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_restore_lights_preserves_concurrent_manual_override() {
+        let state = new_shared_state();
+        let (manager, tx) = StateManager::new(state.clone(), crate::event::EventBus::new(16));
+        tokio::spawn(manager.run());
+
+        let room = "kitchen".to_string();
+
+        // Snapshot taken before an optimistic lights-on (circadian source)
+        let snapshot = RoomState::default();
+
+        // Optimistic update, then a concurrent ExternalChange lands while
+        // the publish is failing (sets Manual + a fresh override TTL)
+        tx.send(StateCommand::UpdateRoomState {
+            room_id: room.clone(),
+            update: RoomStateUpdate::LightsOnWithPush {
+                brightness: Some(200),
+                color_temp_mired: Some(300),
+                source: UpdateSource::Circadian,
+            },
+        })
+        .await
+        .unwrap();
+        tx.send(StateCommand::UpdateRoomState {
+            room_id: room.clone(),
+            update: RoomStateUpdate::ExternalChange { ttl_secs: 600 },
+        })
+        .await
+        .unwrap();
+
+        // Rollback of the failed publish
+        tx.send(StateCommand::UpdateRoomState {
+            room_id: room.clone(),
+            update: RoomStateUpdate::RestoreLights(Box::new(snapshot)),
+        })
+        .await
+        .unwrap();
+
+        wait_until(&state, |s| {
+            s.rooms.get("kitchen").is_some_and(|r| !r.lights_on)
+        })
+        .await;
+        let current = state.load();
+        let rs = current.rooms.get("kitchen").unwrap();
+        // Light fields rolled back...
+        assert!(!rs.lights_on);
+        assert_eq!(rs.intended_brightness, None);
+        // ...but the concurrent manual override survives intact
+        assert_eq!(rs.update_source, UpdateSource::Manual);
+        assert!(rs.is_manual_override_active());
     }
 
     #[tokio::test]
