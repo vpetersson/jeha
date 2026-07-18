@@ -148,7 +148,6 @@ mod tests {
             ieee_address: "0x0011223344556677".to_string(),
             friendly_name: "test".to_string(),
             supported: true,
-            available: true,
             supports_brightness: true,
             supports_color_temp,
             color_temp_min: min,

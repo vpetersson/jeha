@@ -11,7 +11,6 @@ pub struct Z2mDeviceInfo {
     pub ieee_address: String,
     pub friendly_name: String,
     pub supported: bool,
-    pub available: bool,
     pub supports_brightness: bool,
     pub supports_color_temp: bool,
     pub color_temp_min: Option<u16>,
@@ -160,10 +159,22 @@ pub struct SystemState {
     pub group_map: Arc<HashMap<String, Z2mGroupInfo>>,
     /// Reverse index: Z2M friendly name -> IEEE address. Rebuilt with device_map.
     pub friendly_to_ieee: Arc<HashMap<String, String>>,
+    /// Availability overlay (IEEE -> available) from Z2M availability topics.
+    /// Kept separate from device_map so updates clone a small bool map, not
+    /// every device struct. Devices absent here are assumed available.
+    pub availability: Arc<HashMap<String, bool>>,
     pub rooms: HashMap<String, RoomState>,
     pub mqtt_connected: bool,
     pub z2m_online: bool,
     pub started_at: Option<Instant>,
+}
+
+impl SystemState {
+    /// Whether a device is available per Z2M availability topics.
+    /// Unknown devices default to available (availability may be disabled in Z2M).
+    pub fn is_device_available(&self, ieee: &str) -> bool {
+        self.availability.get(ieee).copied().unwrap_or(true)
+    }
 }
 
 pub type SharedState = Arc<ArcSwap<SystemState>>;
@@ -179,8 +190,11 @@ pub enum StateCommand {
         room_id: String,
         update: RoomStateUpdate,
     },
+    /// Availability report from a `<friendly_name>/availability` topic.
+    /// Resolved to an IEEE inside the actor; reports for not-yet-known
+    /// friendly names are buffered and applied on the next UpdateDevices.
     SetDeviceAvailability {
-        ieee: String,
+        friendly_name: String,
         available: bool,
     },
     SetMqttConnected(bool),
@@ -227,40 +241,72 @@ pub enum RoomStateUpdate {
 pub struct StateManager {
     state: SharedState,
     rx: mpsc::Receiver<StateCommand>,
+    /// Availability reports whose friendly name didn't resolve to a known
+    /// device yet (retained availability can arrive before bridge/devices).
+    /// Applied and drained on the next UpdateDevices.
+    pending_availability: HashMap<String, bool>,
 }
 
 impl StateManager {
     pub fn new(state: SharedState) -> (Self, mpsc::Sender<StateCommand>) {
         let (tx, rx) = mpsc::channel(256);
-        (Self { state, rx }, tx)
+        (
+            Self {
+                state,
+                rx,
+                pending_availability: HashMap::new(),
+            },
+            tx,
+        )
     }
 
     pub async fn run(mut self) {
         while let Some(cmd) = self.rx.recv().await {
             let mut current = (**self.state.load()).clone();
             match cmd {
-                StateCommand::UpdateDevices(mut devices) => {
-                    // bridge/devices payloads carry no availability info; keep
-                    // what availability topics have told us about known devices.
-                    for (ieee, device) in devices.iter_mut() {
-                        if let Some(old) = current.device_map.get(ieee) {
-                            device.available = old.available;
+                StateCommand::UpdateDevices(devices) => {
+                    let friendly_to_ieee: HashMap<String, String> = devices
+                        .values()
+                        .map(|d| (d.friendly_name.clone(), d.ieee_address.clone()))
+                        .collect();
+
+                    // Apply availability reports that arrived before this
+                    // device list; keep the ones that still don't resolve.
+                    let mut availability: HashMap<String, bool> = current
+                        .availability
+                        .iter()
+                        .filter(|(ieee, _)| devices.contains_key(*ieee))
+                        .map(|(ieee, avail)| (ieee.clone(), *avail))
+                        .collect();
+                    self.pending_availability.retain(|friendly, avail| {
+                        if let Some(ieee) = friendly_to_ieee.get(friendly) {
+                            availability.insert(ieee.clone(), *avail);
+                            false
+                        } else {
+                            true
                         }
-                    }
-                    current.friendly_to_ieee = Arc::new(
-                        devices
-                            .values()
-                            .map(|d| (d.friendly_name.clone(), d.ieee_address.clone()))
-                            .collect(),
-                    );
+                    });
+
+                    current.friendly_to_ieee = Arc::new(friendly_to_ieee);
+                    current.availability = Arc::new(availability);
                     current.device_map = Arc::new(devices);
                 }
                 StateCommand::UpdateGroups(groups) => {
                     current.group_map = Arc::new(groups);
                 }
-                StateCommand::SetDeviceAvailability { ieee, available } => {
-                    if let Some(device) = Arc::make_mut(&mut current.device_map).get_mut(&ieee) {
-                        device.available = available;
+                StateCommand::SetDeviceAvailability {
+                    friendly_name,
+                    available,
+                } => {
+                    if let Some(ieee) = current.friendly_to_ieee.get(&friendly_name) {
+                        Arc::make_mut(&mut current.availability).insert(ieee.clone(), available);
+                    } else {
+                        tracing::debug!(
+                            "Availability for unknown device '{}' buffered until device list arrives",
+                            friendly_name
+                        );
+                        self.pending_availability.insert(friendly_name, available);
+                        continue; // no state change to publish
                     }
                 }
                 StateCommand::UpdateRoomState { room_id, update } => {
@@ -360,5 +406,87 @@ impl StateManager {
             }
             self.state.store(Arc::new(current));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_device(ieee: &str, friendly_name: &str) -> Z2mDeviceInfo {
+        Z2mDeviceInfo {
+            ieee_address: ieee.to_string(),
+            friendly_name: friendly_name.to_string(),
+            supported: true,
+            supports_brightness: true,
+            supports_color_temp: false,
+            color_temp_min: None,
+            color_temp_max: None,
+            supports_color_xy: false,
+            supports_color_hs: false,
+        }
+    }
+
+    async fn wait_until(state: &SharedState, cond: impl Fn(&SystemState) -> bool) {
+        for _ in 0..200 {
+            if cond(&state.load()) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("condition not met within 1s");
+    }
+
+    #[tokio::test]
+    async fn test_availability_buffered_until_device_list() {
+        let state = new_shared_state();
+        let (manager, tx) = StateManager::new(state.clone());
+        tokio::spawn(manager.run());
+
+        // Retained availability can arrive before the first bridge/devices
+        tx.send(StateCommand::SetDeviceAvailability {
+            friendly_name: "lamp".to_string(),
+            available: false,
+        })
+        .await
+        .unwrap();
+
+        let mut devices = HashMap::new();
+        devices.insert("0xAA".to_string(), make_device("0xAA", "lamp"));
+        tx.send(StateCommand::UpdateDevices(devices)).await.unwrap();
+
+        wait_until(&state, |s| !s.device_map.is_empty()).await;
+        let current = state.load();
+        // Buffered report was applied once the device list resolved the name
+        assert!(!current.is_device_available("0xAA"));
+        // Unknown devices default to available
+        assert!(current.is_device_available("0xBB"));
+    }
+
+    #[tokio::test]
+    async fn test_availability_pruned_for_removed_devices() {
+        let state = new_shared_state();
+        let (manager, tx) = StateManager::new(state.clone());
+        tokio::spawn(manager.run());
+
+        let mut devices = HashMap::new();
+        devices.insert("0xAA".to_string(), make_device("0xAA", "lamp"));
+        tx.send(StateCommand::UpdateDevices(devices)).await.unwrap();
+        wait_until(&state, |s| !s.device_map.is_empty()).await;
+
+        tx.send(StateCommand::SetDeviceAvailability {
+            friendly_name: "lamp".to_string(),
+            available: false,
+        })
+        .await
+        .unwrap();
+        wait_until(&state, |s| !s.is_device_available("0xAA")).await;
+
+        // Device removed from Z2M: its availability entry is pruned
+        tx.send(StateCommand::UpdateDevices(HashMap::new()))
+            .await
+            .unwrap();
+        wait_until(&state, |s| s.device_map.is_empty()).await;
+        assert!(state.load().is_device_available("0xAA"));
     }
 }

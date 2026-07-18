@@ -161,7 +161,6 @@ async fn handle_bridge_devices(
             ieee_address: device.ieee_address.clone(),
             friendly_name: device.friendly_name,
             supported: device.supported.unwrap_or(true),
-            available: true,
             supports_brightness: false,
             supports_color_temp: false,
             color_temp_min: None,
@@ -291,21 +290,27 @@ async fn handle_availability(
     let text = std::str::from_utf8(payload)?;
     let available = text.contains("online");
 
-    let current = state.load();
-    let ieee = current.friendly_to_ieee.get(device_name).cloned();
+    // Always record availability — the StateManager resolves the friendly
+    // name itself and buffers reports that arrive before the device list.
+    let _ = state_tx
+        .send(StateCommand::SetDeviceAvailability {
+            friendly_name: device_name.to_string(),
+            available,
+        })
+        .await;
 
-    if let Some(ieee) = ieee {
+    let current = state.load();
+    if let Some(ieee) = current.friendly_to_ieee.get(device_name).cloned() {
         debug!(
             "Device '{}' ({}): available={}",
             device_name, ieee, available
         );
-        let _ = state_tx
-            .send(StateCommand::SetDeviceAvailability {
-                ieee: ieee.clone(),
-                available,
-            })
-            .await;
         event_bus.publish(Event::DeviceAvailabilityChanged { ieee, available });
+    } else {
+        debug!(
+            "Availability for '{}' received before device list; buffered",
+            device_name
+        );
     }
 
     Ok(())

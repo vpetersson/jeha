@@ -195,7 +195,7 @@ impl Publisher {
         let current = self.state.load();
         // Skip devices reported offline by Z2M availability — the circadian
         // engine re-pushes on DeviceAvailabilityChanged when they return.
-        if current.device_map.get(ieee).is_some_and(|d| !d.available) {
+        if !current.is_device_available(ieee) {
             debug!("Skipping circadian push to offline device {}", ieee);
             return Ok(());
         }
