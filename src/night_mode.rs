@@ -258,10 +258,20 @@ impl NightModeScheduler {
                 _ = interval.tick() => {
                     self.check_schedules().await;
                 }
-                Ok(event) = event_rx.recv() => {
-                    // Track manual deactivations to suppress re-activation
-                    if let Event::NightModeChanged { room_id, active: false } = event {
-                        self.suppressed.insert(room_id);
+                result = event_rx.recv() => {
+                    match result {
+                        // Track manual deactivations to suppress re-activation
+                        Ok(Event::NightModeChanged { room_id, active: false }) => {
+                            self.suppressed.insert(room_id);
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!("Night mode scheduler lagged, {} events dropped", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            info!("Event bus closed, night mode scheduler shutting down");
+                            return;
+                        }
                     }
                 }
             }

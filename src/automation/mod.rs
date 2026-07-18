@@ -91,8 +91,19 @@ impl AutomationEngine {
                     info!("Automation engine shutting down");
                     return;
                 }
-                Ok(event) = event_rx.recv() => {
-                    self.handle_event(event).await;
+                result = event_rx.recv() => {
+                    match result {
+                        Ok(event) => self.handle_event(event).await,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            // Dropped events may include motion — log loudly so
+                            // "lights stuck on/off" is diagnosable.
+                            error!("Automation engine lagged, {} events dropped", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            info!("Event bus closed, automation engine shutting down");
+                            return;
+                        }
+                    }
                 }
             }
         }

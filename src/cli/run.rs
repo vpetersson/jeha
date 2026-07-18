@@ -89,10 +89,27 @@ pub async fn run_daemon(
     ));
 
     // 3-4. Start MQTT event loop (subscribes on connect)
+    let mut startup_rx = event_bus.subscribe();
     tokio::spawn(mqtt.run());
 
-    // Wait a moment for MQTT to connect and receive retained messages
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Wait for the retained Z2M device list before starting the engines, so
+    // their first cycles see real state. Bounded: if the broker is down we
+    // start anyway — everything self-heals when it connects.
+    let wait = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            match startup_rx.recv().await {
+                Ok(crate::event::Event::DevicesUpdated) => break,
+                Ok(_) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
+    .await;
+    if wait.is_err() {
+        info!("No Z2M device list within 5s; starting engines anyway (will sync on connect)");
+    }
+    drop(startup_rx);
 
     // 5. Start circadian engine
     let circadian_for_automations = Arc::new(CircadianEngine::new(
@@ -212,9 +229,17 @@ pub async fn run_daemon(
         }
     });
 
-    // Wait for shutdown signal
-    tokio::signal::ctrl_c().await?;
-    info!("Shutdown signal received");
+    // Wait for shutdown signal (SIGINT from a terminal, SIGTERM from systemd)
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            result?;
+            info!("SIGINT received, shutting down");
+        }
+        _ = sigterm.recv() => {
+            info!("SIGTERM received, shutting down");
+        }
+    }
     cancel.cancel();
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     info!("jeha stopped");

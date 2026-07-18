@@ -321,11 +321,23 @@ pub async fn light_on(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     } else {
         let lights = app.lights_for_room(&room_id);
+        let mut failed = 0usize;
         for ieee in &lights {
-            let _ = app
+            if let Err(e) = app
                 .publisher
                 .turn_on_ieee(ieee, body.brightness, ct_mired, body.transition)
-                .await;
+                .await
+            {
+                tracing::warn!("light_on: publish to {} failed: {}", ieee, e);
+                failed += 1;
+            }
+        }
+        if failed > 0 && failed == lights.len() {
+            return Err(ApiError::Internal(format!(
+                "Failed to publish to all {} lights in '{}'",
+                lights.len(),
+                room_id
+            )));
         }
     }
 
@@ -420,8 +432,19 @@ pub async fn light_off(
             .get(&room_id)
             .map(|r| r.lights.clone())
             .unwrap_or_default();
+        let mut failed = 0usize;
         for ieee in &lights {
-            let _ = app.publisher.turn_off_ieee(ieee, body.transition).await;
+            if let Err(e) = app.publisher.turn_off_ieee(ieee, body.transition).await {
+                tracing::warn!("light_off: publish to {} failed: {}", ieee, e);
+                failed += 1;
+            }
+        }
+        if failed > 0 && failed == lights.len() {
+            return Err(ApiError::Internal(format!(
+                "Failed to publish to all {} lights in '{}'",
+                lights.len(),
+                room_id
+            )));
         }
     }
 
@@ -611,11 +634,23 @@ pub async fn set_scene(
             .map_err(|e| ApiError::Internal(e.to_string()))?;
     } else {
         let lights = app.lights_for_room(&room_id);
+        let mut failed = 0usize;
         for ieee in &lights {
-            let _ = app
+            if let Err(e) = app
                 .publisher
                 .turn_on_ieee(ieee, Some(brightness), Some(ct_mired), Some(3))
-                .await;
+                .await
+            {
+                tracing::warn!("set_scene: publish to {} failed: {}", ieee, e);
+                failed += 1;
+            }
+        }
+        if failed > 0 && failed == lights.len() {
+            return Err(ApiError::Internal(format!(
+                "Failed to publish to all {} lights in '{}'",
+                lights.len(),
+                room_id
+            )));
         }
     }
 

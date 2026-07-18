@@ -16,6 +16,12 @@ pub struct ConfigSync {
     state: SharedState,
     event_bus: EventBus,
     cancel: CancellationToken,
+    /// Groups already appended to the config file this session. The in-memory
+    /// `config` is immutable, so without this every retained `bridge/groups`
+    /// redelivery (e.g. on MQTT reconnect) would re-append the same rooms —
+    /// and duplicate TOML tables make the config unparseable on restart.
+    appended_groups: HashSet<String>,
+    appended_room_ids: HashSet<String>,
 }
 
 impl ConfigSync {
@@ -32,10 +38,12 @@ impl ConfigSync {
             state,
             event_bus,
             cancel,
+            appended_groups: HashSet::new(),
+            appended_room_ids: HashSet::new(),
         }
     }
 
-    pub async fn run(self) {
+    pub async fn run(mut self) {
         info!("Config sync started");
         let mut event_rx = self.event_bus.subscribe();
 
@@ -45,32 +53,44 @@ impl ConfigSync {
                     info!("Config sync shutting down");
                     return;
                 }
-                Ok(event) = event_rx.recv() => {
-                    if matches!(event, Event::GroupsUpdated)
-                        && let Err(e) = self.sync_new_groups().await
-                    {
-                        warn!("Config sync failed: {}", e);
+                result = event_rx.recv() => {
+                    match result {
+                        Ok(Event::GroupsUpdated) => {
+                            if let Err(e) = self.sync_new_groups().await {
+                                warn!("Config sync failed: {}", e);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            warn!("Config sync lagged, {} events dropped", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            info!("Event bus closed, config sync shutting down");
+                            return;
+                        }
                     }
                 }
             }
         }
     }
 
-    async fn sync_new_groups(&self) -> Result<()> {
+    async fn sync_new_groups(&mut self) -> Result<()> {
         let current_state = self.state.load();
 
-        // Collect all Z2M group names already referenced in config
+        // Collect all Z2M group names already referenced in config,
+        // plus any we already appended to the file this session.
         let known_groups: HashSet<&str> = self
             .config
             .rooms
             .values()
             .filter_map(|r| r.z2m_group.as_deref())
+            .chain(self.appended_groups.iter().map(|s| s.as_str()))
             .collect();
 
         // Find groups that have light members but aren't in config
         let mut new_entries = Vec::new();
 
-        for (group_name, group_info) in &current_state.group_map {
+        for (group_name, group_info) in current_state.group_map.iter() {
             if known_groups.contains(group_name.as_str()) {
                 continue;
             }
@@ -100,8 +120,10 @@ impl ConfigSync {
                 .filter(|c| c.is_alphanumeric() || *c == '_')
                 .collect::<String>();
 
-            // Skip if a room with this ID already exists
-            if self.config.rooms.contains_key(&room_id) {
+            // Skip if a room with this ID already exists (in config or
+            // appended earlier this session)
+            if self.config.rooms.contains_key(&room_id) || self.appended_room_ids.contains(&room_id)
+            {
                 continue;
             }
 
@@ -131,6 +153,11 @@ impl ConfigSync {
         let tmp_path = self.config_path.with_extension("toml.tmp");
         tokio::fs::write(&tmp_path, &updated).await?;
         tokio::fs::rename(&tmp_path, &self.config_path).await?;
+
+        for (room_id, group_name) in &new_entries {
+            self.appended_room_ids.insert(room_id.clone());
+            self.appended_groups.insert(group_name.clone());
+        }
 
         info!(
             "Config updated with {} new room(s). Restart or SIGHUP to apply.",

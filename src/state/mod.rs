@@ -151,14 +151,18 @@ impl RoomState {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+/// Device and group maps are behind `Arc` so the per-command state clone in
+/// `StateManager` is a pointer bump, not a deep copy of every device string.
+/// They only change on Z2M bridge updates (rare); room state changes constantly.
+#[derive(Debug, Clone, Default)]
 pub struct SystemState {
-    pub device_map: HashMap<String, Z2mDeviceInfo>,
-    pub group_map: HashMap<String, Z2mGroupInfo>,
+    pub device_map: Arc<HashMap<String, Z2mDeviceInfo>>,
+    pub group_map: Arc<HashMap<String, Z2mGroupInfo>>,
+    /// Reverse index: Z2M friendly name -> IEEE address. Rebuilt with device_map.
+    pub friendly_to_ieee: Arc<HashMap<String, String>>,
     pub rooms: HashMap<String, RoomState>,
     pub mqtt_connected: bool,
     pub z2m_online: bool,
-    #[serde(skip)]
     pub started_at: Option<Instant>,
 }
 
@@ -174,6 +178,10 @@ pub enum StateCommand {
     UpdateRoomState {
         room_id: String,
         update: RoomStateUpdate,
+    },
+    SetDeviceAvailability {
+        ieee: String,
+        available: bool,
     },
     SetMqttConnected(bool),
     SetZ2mOnline(bool),
@@ -211,6 +219,9 @@ pub enum RoomStateUpdate {
         ttl_secs: u64,
     },
     Illuminance(crate::event::Illuminance),
+    /// Restore a room to a previously captured snapshot. Used to roll back
+    /// an optimistic update when the corresponding MQTT publish fails.
+    Restore(Box<RoomState>),
 }
 
 pub struct StateManager {
@@ -228,11 +239,29 @@ impl StateManager {
         while let Some(cmd) = self.rx.recv().await {
             let mut current = (**self.state.load()).clone();
             match cmd {
-                StateCommand::UpdateDevices(devices) => {
-                    current.device_map = devices;
+                StateCommand::UpdateDevices(mut devices) => {
+                    // bridge/devices payloads carry no availability info; keep
+                    // what availability topics have told us about known devices.
+                    for (ieee, device) in devices.iter_mut() {
+                        if let Some(old) = current.device_map.get(ieee) {
+                            device.available = old.available;
+                        }
+                    }
+                    current.friendly_to_ieee = Arc::new(
+                        devices
+                            .values()
+                            .map(|d| (d.friendly_name.clone(), d.ieee_address.clone()))
+                            .collect(),
+                    );
+                    current.device_map = Arc::new(devices);
                 }
                 StateCommand::UpdateGroups(groups) => {
-                    current.group_map = groups;
+                    current.group_map = Arc::new(groups);
+                }
+                StateCommand::SetDeviceAvailability { ieee, available } => {
+                    if let Some(device) = Arc::make_mut(&mut current.device_map).get_mut(&ieee) {
+                        device.available = available;
+                    }
                 }
                 StateCommand::UpdateRoomState { room_id, update } => {
                     let room = current.rooms.entry(room_id).or_default();
@@ -316,6 +345,9 @@ impl StateManager {
                         }
                         RoomStateUpdate::Illuminance(val) => {
                             room.last_illuminance = Some(val);
+                        }
+                        RoomStateUpdate::Restore(snapshot) => {
+                            *room = *snapshot;
                         }
                     }
                 }
