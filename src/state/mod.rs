@@ -241,6 +241,10 @@ pub enum RoomStateUpdate {
     RestoreLights(Box<RoomState>),
 }
 
+/// Upper bound on buffered availability reports for unknown friendly names.
+/// The availability subscription is a wildcard, so this must be bounded.
+const PENDING_AVAILABILITY_CAP: usize = 256;
+
 pub struct StateManager {
     state: SharedState,
     rx: mpsc::Receiver<StateCommand>,
@@ -323,11 +327,23 @@ impl StateManager {
                             available,
                         });
                     } else {
-                        tracing::debug!(
-                            "Availability for unknown device '{}' buffered until device list arrives",
-                            friendly_name
-                        );
-                        self.pending_availability.insert(friendly_name, available);
+                        // Bounded: the availability subscription is a wildcard,
+                        // so stale/foreign topics must not grow this forever.
+                        if self.pending_availability.len() >= PENDING_AVAILABILITY_CAP
+                            && !self.pending_availability.contains_key(&friendly_name)
+                        {
+                            tracing::warn!(
+                                "Dropping availability for unknown device '{}': pending buffer full ({} entries)",
+                                friendly_name,
+                                PENDING_AVAILABILITY_CAP
+                            );
+                        } else {
+                            tracing::debug!(
+                                "Availability for unknown device '{}' buffered until device list arrives",
+                                friendly_name
+                            );
+                            self.pending_availability.insert(friendly_name, available);
+                        }
                         continue; // no state change to publish
                     }
                 }

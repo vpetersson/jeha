@@ -79,10 +79,28 @@ impl RoomLookup {
         let mut sensor_rooms: HashMap<String, Vec<String>> = HashMap::new();
         for (room_id, rc) in &config.rooms {
             if let Some(ref group) = rc.z2m_group {
-                group_to_room.insert(group.clone(), room_id.clone());
+                if let Some(prev) = group_to_room.insert(group.clone(), room_id.clone()) {
+                    tracing::warn!(
+                        "Z2M group '{}' is referenced by both room '{}' and room '{}'; \
+                         group state will be attributed to '{}'",
+                        group,
+                        prev,
+                        room_id,
+                        room_id
+                    );
+                }
             } else {
                 for ieee in &rc.lights {
-                    ieee_to_room.insert(ieee.clone(), room_id.clone());
+                    if let Some(prev) = ieee_to_room.insert(ieee.clone(), room_id.clone()) {
+                        tracing::warn!(
+                            "Light {} is listed in both room '{}' and room '{}'; \
+                             its state will be attributed to '{}'",
+                            ieee,
+                            prev,
+                            room_id,
+                            room_id
+                        );
+                    }
                 }
             }
             if let Some(ref sensor) = rc.motion_sensor {
