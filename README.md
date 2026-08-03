@@ -1,3 +1,5 @@
+[![sbomified](https://sbomify.com/assets/images/logo/badge.svg)](https://app.sbomify.com/public/product/MIToCzev3QBI/)
+
 <p align="center">
   <img src="logo.png" alt="jeha logo" width="200">
 </p>
