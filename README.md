@@ -10,7 +10,7 @@ Opinionated, batteries-included light automation daemon for [Zigbee2MQTT](https:
 
 jeha does one thing well: **lighting**. Circadian rhythms, motion-activated lights, night mode, scenes - all with sensible defaults that work out of the box. Point it at your Z2M instance and your lights just work. For everything else (climate, media, blinds, complex automations), use [Home Assistant](https://www.home-assistant.io/) or similar.
 
-Single static binary. No runtime dependencies. The Docker image is under 10MB (Home Assistant's is 2.3GB).
+Single static binary. No runtime dependencies. The Docker image is under 4MB (Home Assistant's is 2.3GB).
 
 ## Why
 
@@ -58,7 +58,7 @@ schema_version = 1
 z2m_group = "Kitchen"
 ```
 
-That gives you circadian lighting with sensible defaults (cosine curve, 06:00-23:00, 2700K-4500K-2200K). Add a motion sensor and lights turn on/off automatically:
+That gives you circadian lighting with sensible defaults (cosine curve, 06:00-23:00, 2700K-4000K-2200K). Add a motion sensor and lights turn on/off automatically:
 
 ```toml
 [rooms.hallway]
