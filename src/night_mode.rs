@@ -15,8 +15,35 @@ use crate::mqtt::publish::Publisher;
 use crate::schedule::LocalNow;
 use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
 
+/// What initiated a night mode transition.
+///
+/// Only matters when the room's lights are off: someone pressing the night mode
+/// button (or calling the API) expects a visible response, while a scheduled
+/// transition must never light up a dark room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NightModeTrigger {
+    /// Remote button press or REST API call.
+    User,
+    /// Schedule window, wake-time edge, or stale-state fallback.
+    Scheduled,
+}
+
+/// Whether an activation should send light commands.
+///
+/// Lights already on: always re-push, so they drop to the night values.
+/// Lights off: only for an explicit user action, and only when the room allows it.
+fn should_push_night_values(
+    lights_on: bool,
+    trigger: NightModeTrigger,
+    turn_on_when_off: bool,
+) -> bool {
+    lights_on || (trigger == NightModeTrigger::User && turn_on_when_off)
+}
+
 /// Activate night mode for a room: push night mode light values, pause circadian, set flag.
-/// Only pushes light values if lights are currently on.
+/// With the lights off, a user-triggered activation turns them on at the night mode
+/// values (unless `night_mode.turn_on_when_off` is false); a scheduled one only sets the flag.
+#[allow(clippy::too_many_arguments)]
 pub async fn activate_night_mode(
     room_id: &str,
     room_config: &RoomConfig,
@@ -25,6 +52,7 @@ pub async fn activate_night_mode(
     state: &SharedState,
     state_tx: &mpsc::Sender<StateCommand>,
     event_bus: &EventBus,
+    trigger: NightModeTrigger,
 ) -> Result<()> {
     let enm = room_config.effective_night_mode(&config.night_mode.defaults);
     let ct_mired = (1_000_000u32 / enm.color_temp_k as u32) as u16;
@@ -48,7 +76,6 @@ pub async fn activate_night_mode(
         })
         .await;
 
-    // Only push values if lights are on
     let lights_on = state
         .load()
         .rooms
@@ -56,7 +83,14 @@ pub async fn activate_night_mode(
         .map(|rs| rs.lights_on)
         .unwrap_or(false);
 
-    if lights_on {
+    if should_push_night_values(lights_on, trigger, enm.turn_on_when_off) {
+        if !lights_on {
+            info!(
+                "Night mode: turning on lights in '{}' (brightness {}, {}K) — room was off",
+                room_id, enm.brightness, enm.color_temp_k
+            );
+        }
+
         if let Some(ref group) = room_config.z2m_group {
             publisher
                 .turn_on_group(group, Some(enm.brightness), Some(ct_mired), Some(3))
@@ -72,23 +106,22 @@ pub async fn activate_night_mode(
         let _ = state_tx
             .send(StateCommand::UpdateRoomState {
                 room_id: room_id.to_string(),
-                update: RoomStateUpdate::LightsOn {
+                update: RoomStateUpdate::LightsOnWithPush {
                     brightness: Some(enm.brightness),
                     color_temp_mired: Some(ct_mired),
                     source: UpdateSource::Automation,
                 },
             })
             .await;
-
-        let _ = state_tx
-            .send(StateCommand::UpdateRoomState {
-                room_id: room_id.to_string(),
-                update: RoomStateUpdate::JehaPush {
-                    brightness: Some(enm.brightness),
-                    color_temp_mired: Some(ct_mired),
-                },
-            })
-            .await;
+    } else {
+        info!(
+            "Night mode: flag set for '{}' but lights are off, no light command sent ({})",
+            room_id,
+            match trigger {
+                NightModeTrigger::User => "night_mode.turn_on_when_off is false",
+                NightModeTrigger::Scheduled => "scheduled transition",
+            }
+        );
     }
 
     event_bus.publish(Event::NightModeChanged {
@@ -168,24 +201,22 @@ pub async fn deactivate_night_mode(
             let _ = state_tx
                 .send(StateCommand::UpdateRoomState {
                     room_id: room_id.to_string(),
-                    update: RoomStateUpdate::LightsOn {
+                    update: RoomStateUpdate::LightsOnWithPush {
                         brightness: Some(target.brightness),
                         color_temp_mired: ct_mired,
                         source: UpdateSource::Circadian,
                     },
                 })
                 .await;
-
-            let _ = state_tx
-                .send(StateCommand::UpdateRoomState {
-                    room_id: room_id.to_string(),
-                    update: RoomStateUpdate::JehaPush {
-                        brightness: Some(target.brightness),
-                        color_temp_mired: ct_mired,
-                    },
-                })
-                .await;
         }
+    } else {
+        // Leaving the lights off is the intent here: the room is dark, so there is
+        // nothing to re-colour. Clearing the flag is enough — the next turn-on takes
+        // the circadian branch in the LightsOn handler.
+        info!(
+            "Day mode: night mode cleared in '{}', lights are off so circadian applies on the next turn-on",
+            room_id
+        );
     }
 
     event_bus.publish(Event::NightModeChanged {
@@ -306,6 +337,7 @@ impl NightModeScheduler {
                     &self.state,
                     &self.state_tx,
                     &self.event_bus,
+                    NightModeTrigger::Scheduled,
                 )
                 .await;
             } else if !in_window && is_active {
@@ -461,6 +493,46 @@ fn should_wake_deactivate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_push_night_values_when_lights_on() {
+        // Lights on: always push, whatever the trigger or the config knob.
+        for trigger in [NightModeTrigger::User, NightModeTrigger::Scheduled] {
+            for turn_on_when_off in [true, false] {
+                assert!(should_push_night_values(true, trigger, turn_on_when_off));
+            }
+        }
+    }
+
+    #[test]
+    fn test_push_night_values_on_user_press_with_lights_off() {
+        // The reported bug: a button press with the lights off must still reach the bulbs.
+        assert!(should_push_night_values(
+            false,
+            NightModeTrigger::User,
+            true
+        ));
+    }
+
+    #[test]
+    fn test_no_push_on_user_press_when_opted_out() {
+        assert!(!should_push_night_values(
+            false,
+            NightModeTrigger::User,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_scheduled_activation_never_lights_a_dark_room() {
+        for turn_on_when_off in [true, false] {
+            assert!(!should_push_night_values(
+                false,
+                NightModeTrigger::Scheduled,
+                turn_on_when_off
+            ));
+        }
+    }
 
     #[test]
     fn test_wake_deactivate_before_wake_time() {

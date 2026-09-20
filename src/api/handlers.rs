@@ -964,6 +964,7 @@ pub async fn set_night_mode(
             &app.state,
             &app.state_tx,
             &app.event_bus,
+            crate::night_mode::NightModeTrigger::User,
         )
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;

@@ -127,7 +127,15 @@ Night mode sets lights to the warmest color and minimum brightness. Global defau
 color_temp_k = 2000           # Warmest available
 brightness = 2                # Near minimum
 motion_timeout_secs = 120     # Shorter timeout during night
+turn_on_when_off = true       # Night mode button turns dark rooms on at these values
 ```
+
+`turn_on_when_off` only applies to explicit requests — the night mode button on a
+remote, or `POST /rooms/<room>/night_mode`. Pressing it in a dark room turns the
+lights on at the night mode values, so the button always does something visible.
+Scheduled night mode never turns lights on; it just arms the mode for the next
+time the room lights up. Set it to `false` to have explicit requests behave the
+same way.
 
 Enable night mode on a schedule per room:
 
@@ -144,6 +152,7 @@ schedule = { after = "22:00", before = "06:30" }
 color_temp_k = 2000
 brightness = 5
 motion_timeout_secs = 60
+turn_on_when_off = false
 ```
 
 ### Schedules

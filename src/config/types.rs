@@ -147,6 +147,11 @@ pub struct NightModeDefaults {
     pub color_temp_k: u16,
     pub brightness: u8,
     pub motion_timeout_secs: u64,
+    /// When someone explicitly enables night mode (remote button or REST API) while
+    /// the room's lights are off, turn them on at the night mode values instead of
+    /// silently flipping the flag. Scheduled transitions never turn lights on.
+    #[serde(default = "default_true")]
+    pub turn_on_when_off: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -249,6 +254,8 @@ pub struct NightModeOverride {
     pub color_temp_k: Option<u16>,
     pub brightness: Option<u8>,
     pub motion_timeout_secs: Option<u64>,
+    /// Per-room override for `night_mode.defaults.turn_on_when_off`.
+    pub turn_on_when_off: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
