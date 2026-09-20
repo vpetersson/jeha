@@ -21,6 +21,10 @@ Rust toolchain is at `~/.cargo/bin` (may not be in default PATH).
 
 CLI subcommands: `run`, `validate`, `migrate`, `schema`, `init`.
 
+## Versioning
+
+CalVer, `YY.MM.MICRO` (`26.9.0` = first release of September 2026). Months are not zero-padded — Cargo requires a valid SemVer string and SemVer rejects leading zeros. To cut a release: bump `version` in `Cargo.toml`, refresh `Cargo.lock` with `cargo update -p jeha`, merge to `master`, then push a `vYY.MM.MICRO` tag. The tag triggers `.github/workflows/release.yml`, which cross-builds the musl targets, publishes the Docker tag, and creates the GitHub release. See `doc/adr/0003-adopt-calendar-versioning.md`.
+
 ## Architecture
 
 Event-driven daemon with concurrent engines coordinating through shared state and a broadcast event bus:
