@@ -41,6 +41,44 @@ fn record_occupancy(cache: &Mutex<HashMap<String, bool>>, ieee: &str, occupancy:
     }
 }
 
+/// Last `action` seen per remote IEEE, with the time it was accepted. Z2M
+/// keeps the most recent `action` in the device's state document, so every
+/// later republish of that device (battery, linkquality, update availability)
+/// carries the same action again and would be replayed as a fresh button
+/// press.
+static REMOTE_ACTION_STATE: LazyLock<Mutex<HashMap<String, (String, Instant)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// How long an identical action from the same remote is treated as a
+/// republish rather than a new press. Deliberate repeat presses are hundreds
+/// of milliseconds apart at the very fastest, while republish storms land in
+/// the same millisecond, so this keeps real double-presses working.
+const REMOTE_ACTION_DEDUP_WINDOW: Duration = Duration::from_millis(500);
+
+/// Records `action` for `ieee` and reports whether it should be published as
+/// a button press. Returns `false` for an identical action seen inside
+/// [`REMOTE_ACTION_DEDUP_WINDOW`]. A different action always counts, so
+/// genuine sequences (`on_press` then `on_hold`) are never suppressed.
+fn record_remote_action(
+    cache: &Mutex<HashMap<String, (String, Instant)>>,
+    ieee: &str,
+    action: &str,
+    now: Instant,
+) -> bool {
+    let mut cache = cache.lock().unwrap();
+    match cache.get(ieee) {
+        Some((previous, seen_at))
+            if previous == action && now.duration_since(*seen_at) < REMOTE_ACTION_DEDUP_WINDOW =>
+        {
+            false
+        }
+        _ => {
+            cache.insert(ieee.to_string(), (action.to_string(), now));
+            true
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct Z2mDevice {
     ieee_address: String,
@@ -363,11 +401,18 @@ async fn handle_device_state(
         && !action.is_empty()
         && let Some(ieee) = device_ieee
     {
-        debug!("Remote action '{}' from '{}'", action, device_name);
-        event_bus.publish(Event::RemoteAction {
-            remote_ieee: ieee.clone(),
-            action: action.to_string(),
-        });
+        if record_remote_action(&REMOTE_ACTION_STATE, ieee, action, Instant::now()) {
+            debug!("Remote action '{}' from '{}'", action, device_name);
+            event_bus.publish(Event::RemoteAction {
+                remote_ieee: ieee.clone(),
+                action: action.to_string(),
+            });
+        } else {
+            trace!(
+                "Ignoring action='{}' republish from '{}' — within dedup window",
+                action, device_name
+            );
+        }
     }
 
     // Check if this is a motion sensor update
@@ -525,18 +570,25 @@ async fn handle_device_state(
                     );
                 } else {
                     let external_override_secs = config.general.external_override_secs;
+                    // `changed` flags name the comparison that actually tripped
+                    // the tolerance — reported vs *intended*. Without them the
+                    // line can read as a no-op ("brightness 1->1") when the
+                    // trigger was really intended=77 vs reported=1.
                     info!(
                         "External light change detected in room '{}' (via '{}'): \
-                         brightness {:?}->{:?} (intended {:?}), color_temp {:?}->{:?} (intended {:?}). \
+                         brightness {:?}->{:?} (intended {:?}, changed: {}), \
+                         color_temp {:?}->{:?} (intended {:?}, changed: {}). \
                          Pausing circadian for {}m.",
                         room_id,
                         device_name,
                         room_state.current_brightness,
                         has_brightness,
                         room_state.intended_brightness,
+                        brightness_changed,
                         room_state.current_color_temp_mired,
                         has_color_temp,
                         room_state.intended_color_temp_mired,
+                        color_temp_changed,
                         external_override_secs / 60,
                     );
                     let _ = state_tx
@@ -664,5 +716,79 @@ motion_sensor = "0x00158d000aaaaaaa"
         assert!(!record_occupancy(&cache, hallway, true));
         assert!(record_occupancy(&cache, office, false));
         assert!(!record_occupancy(&cache, hallway, true));
+    }
+
+    #[test]
+    fn test_record_remote_action_suppresses_republished_action() {
+        let cache = Mutex::new(HashMap::new());
+        let remote = "0x00158d000ccccccc";
+        let start = Instant::now();
+
+        // First press is always an event.
+        assert!(record_remote_action(&cache, remote, "on_hold", start));
+
+        // Z2M republishing the device state (battery, linkquality, ...) repeats
+        // the same action; those must not replay the press.
+        assert!(!record_remote_action(
+            &cache,
+            remote,
+            "on_hold",
+            start + Duration::from_micros(130)
+        ));
+        assert!(!record_remote_action(
+            &cache,
+            remote,
+            "on_hold",
+            start + Duration::from_millis(52)
+        ));
+
+        // A genuine repeat press outside the window still counts.
+        assert!(record_remote_action(
+            &cache,
+            remote,
+            "on_hold",
+            start + REMOTE_ACTION_DEDUP_WINDOW
+        ));
+    }
+
+    #[test]
+    fn test_record_remote_action_allows_distinct_actions_back_to_back() {
+        let cache = Mutex::new(HashMap::new());
+        let remote = "0x00158d000ccccccc";
+        let start = Instant::now();
+
+        // Real remotes emit sequences like on_press -> on_hold within a few
+        // milliseconds; only exact repeats are republishes.
+        assert!(record_remote_action(&cache, remote, "on_press", start));
+        assert!(record_remote_action(
+            &cache,
+            remote,
+            "on_hold",
+            start + Duration::from_millis(5)
+        ));
+        assert!(record_remote_action(
+            &cache,
+            remote,
+            "on_press_release",
+            start + Duration::from_millis(10)
+        ));
+    }
+
+    #[test]
+    fn test_record_remote_action_tracks_remotes_independently() {
+        let cache = Mutex::new(HashMap::new());
+        let bedroom = "0x00158d000ccccccc";
+        let kitchen = "0x00158d000ddddddd";
+        let start = Instant::now();
+
+        assert!(record_remote_action(&cache, bedroom, "toggle", start));
+        // Same action from a different remote is its own press.
+        assert!(record_remote_action(&cache, kitchen, "toggle", start));
+        assert!(!record_remote_action(
+            &cache,
+            bedroom,
+            "toggle",
+            start + Duration::from_millis(1)
+        ));
     }
 }

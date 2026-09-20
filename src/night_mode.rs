@@ -277,7 +277,7 @@ impl NightModeScheduler {
         }
 
         info!("Night mode scheduler started");
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut interval = crate::schedule::aligned_interval(Duration::from_secs(30));
         let mut event_rx = self.event_bus.subscribe();
 
         loop {

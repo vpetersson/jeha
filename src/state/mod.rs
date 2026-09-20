@@ -321,11 +321,27 @@ impl StateManager {
                     available,
                 } => {
                     if let Some(ieee) = current.friendly_to_ieee.get(&friendly_name) {
-                        Arc::make_mut(&mut current.availability).insert(ieee.clone(), available);
-                        availability_events.push(crate::event::Event::DeviceAvailabilityChanged {
-                            ieee: ieee.clone(),
-                            available,
-                        });
+                        let ieee = ieee.clone();
+                        let previous = Arc::make_mut(&mut current.availability)
+                            .insert(ieee.clone(), available);
+                        // Only a change in availability is an online/offline
+                        // event. Z2M republishes each device's availability
+                        // periodically, and every one of those repeats the
+                        // unchanged value — which would otherwise look like the
+                        // device just came back and make the circadian engine
+                        // re-push brightness/color_temp to a light that never
+                        // went away (including after lights-out turned it off).
+                        if previous == Some(available) {
+                            tracing::trace!(
+                                "Ignoring availability={} republish for '{}' — no transition",
+                                available,
+                                friendly_name
+                            );
+                        } else {
+                            availability_events.push(
+                                crate::event::Event::DeviceAvailabilityChanged { ieee, available },
+                            );
+                        }
                     } else {
                         // Bounded: the availability subscription is a wildcard,
                         // so stale/foreign topics must not grow this forever.
@@ -532,6 +548,71 @@ mod tests {
             }
             other => panic!("unexpected event: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_availability_republish_emits_no_event() {
+        let state = new_shared_state();
+        let event_bus = crate::event::EventBus::new(16);
+        let mut event_rx = event_bus.subscribe();
+        let (manager, tx) = StateManager::new(state.clone(), event_bus);
+        tokio::spawn(manager.run());
+
+        let mut devices = HashMap::new();
+        devices.insert("0xAA".to_string(), make_device("0xAA", "lamp"));
+        tx.send(StateCommand::UpdateDevices(devices)).await.unwrap();
+        wait_until(&state, |s| !s.device_map.is_empty()).await;
+
+        // First report for the device is a transition (jeha has no prior value).
+        tx.send(StateCommand::SetDeviceAvailability {
+            friendly_name: "lamp".to_string(),
+            available: true,
+        })
+        .await
+        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("no availability event within 1s")
+            .unwrap();
+        assert!(matches!(
+            event,
+            crate::event::Event::DeviceAvailabilityChanged {
+                ref ieee,
+                available: true
+            } if ieee == "0xAA"
+        ));
+
+        // Z2M republishes availability periodically. Those repeats carry the
+        // same value and must not look like the device came back online, or
+        // circadian re-pushes brightness to a light that never went away.
+        for _ in 0..3 {
+            tx.send(StateCommand::SetDeviceAvailability {
+                friendly_name: "lamp".to_string(),
+                available: true,
+            })
+            .await
+            .unwrap();
+        }
+
+        // A real offline transition still gets through, and is the very next
+        // event — proving the three republishes above emitted nothing.
+        tx.send(StateCommand::SetDeviceAvailability {
+            friendly_name: "lamp".to_string(),
+            available: false,
+        })
+        .await
+        .unwrap();
+        let event = tokio::time::timeout(std::time::Duration::from_secs(1), event_rx.recv())
+            .await
+            .expect("no availability event within 1s")
+            .unwrap();
+        assert!(matches!(
+            event,
+            crate::event::Event::DeviceAvailabilityChanged {
+                ref ieee,
+                available: false
+            } if ieee == "0xAA"
+        ));
     }
 
     #[tokio::test]
