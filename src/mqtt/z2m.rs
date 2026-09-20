@@ -6,7 +6,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use serde::Deserialize;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::config::types::AppConfig;
 use crate::event::{Event, EventBus, Illuminance};
@@ -22,6 +22,24 @@ use crate::state::{
 static EXTERNAL_CHANGE_DEDUP: LazyLock<Mutex<HashMap<String, Instant>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const EXTERNAL_CHANGE_DEDUP_WINDOW: Duration = Duration::from_secs(2);
+
+/// Last-known `occupancy` value per motion-sensor IEEE, so motion events are
+/// published on transitions only. Keyed by IEEE (not friendly name) because
+/// friendly names can be renamed in Z2M at any time.
+static OCCUPANCY_STATE: LazyLock<Mutex<HashMap<String, bool>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Stores `occupancy` as the current value for `ieee` and reports whether it
+/// is a transition worth publishing. The first report seen for a sensor —
+/// including the retained state replayed right after a restart — always
+/// counts as a transition, since jeha has no prior value to compare against.
+fn record_occupancy(cache: &Mutex<HashMap<String, bool>>, ieee: &str, occupancy: bool) -> bool {
+    let mut cache = cache.lock().unwrap();
+    match cache.insert(ieee.to_string(), occupancy) {
+        Some(previous) => previous != occupancy,
+        None => true,
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct Z2mDevice {
@@ -378,7 +396,17 @@ async fn handle_device_state(
             }
         }
 
-        if occupancy {
+        // Only a change in occupancy is a motion event. Z2M re-emits the full
+        // device state for every attribute update (battery, illuminance,
+        // linkquality...), and each of those republishes carries the unchanged
+        // occupancy value — which would otherwise reset the room's motion-off
+        // timer indefinitely and keep the lights on forever.
+        if !record_occupancy(&OCCUPANCY_STATE, &ieee, occupancy) {
+            trace!(
+                "Ignoring occupancy={} republish from '{}' — no transition",
+                occupancy, device_name
+            );
+        } else if occupancy {
             event_bus.publish(Event::MotionDetected {
                 room_id: String::new(),
                 sensor_ieee: ieee,
@@ -600,5 +628,41 @@ motion_sensor = "0x00158d000aaaaaaa"
             .clone();
         rooms.sort();
         assert_eq!(rooms, vec!["kitchen", "office"]);
+    }
+
+    #[test]
+    fn test_record_occupancy_only_reports_transitions() {
+        let cache = Mutex::new(HashMap::new());
+        let sensor = "0x00158d000aaaaaaa";
+
+        // First report after startup has nothing to compare against
+        assert!(record_occupancy(&cache, sensor, false));
+
+        // Retained-state republishes (battery/illuminance/linkquality reports
+        // re-emitting the same occupancy) must not look like motion events
+        assert!(!record_occupancy(&cache, sensor, false));
+        assert!(!record_occupancy(&cache, sensor, false));
+
+        // Real motion
+        assert!(record_occupancy(&cache, sensor, true));
+        assert!(!record_occupancy(&cache, sensor, true));
+
+        // Real clear
+        assert!(record_occupancy(&cache, sensor, false));
+    }
+
+    #[test]
+    fn test_record_occupancy_tracks_sensors_independently() {
+        let cache = Mutex::new(HashMap::new());
+        let hallway = "0x00158d000aaaaaaa";
+        let office = "0x00158d000bbbbbbb";
+
+        assert!(record_occupancy(&cache, hallway, true));
+        // A different sensor's first report is its own transition, and does
+        // not consume the hallway's cached value
+        assert!(record_occupancy(&cache, office, true));
+        assert!(!record_occupancy(&cache, hallway, true));
+        assert!(record_occupancy(&cache, office, false));
+        assert!(!record_occupancy(&cache, hallway, true));
     }
 }
