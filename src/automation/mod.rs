@@ -657,7 +657,14 @@ impl AutomationEngine {
                     let event_bus = self.event_bus.clone();
                     tokio::spawn(async move {
                         if let Err(e) = crate::night_mode::activate_night_mode(
-                            &rid, &rc, &config, &publisher, &state, &state_tx, &event_bus,
+                            &rid,
+                            &rc,
+                            &config,
+                            &publisher,
+                            &state,
+                            &state_tx,
+                            &event_bus,
+                            crate::night_mode::NightModeTrigger::User,
                         )
                         .await
                         {

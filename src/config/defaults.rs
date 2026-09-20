@@ -52,6 +52,7 @@ impl Default for NightModeDefaults {
             color_temp_k: 2000,
             brightness: 2,
             motion_timeout_secs: 120,
+            turn_on_when_off: true,
         }
     }
 }
@@ -104,12 +105,14 @@ impl RoomConfig {
                 motion_timeout_secs: nm
                     .motion_timeout_secs
                     .unwrap_or(defaults.motion_timeout_secs),
+                turn_on_when_off: nm.turn_on_when_off.unwrap_or(defaults.turn_on_when_off),
             },
             None => EffectiveNightMode {
                 schedule: None,
                 color_temp_k: defaults.color_temp_k,
                 brightness: defaults.brightness,
                 motion_timeout_secs: defaults.motion_timeout_secs,
+                turn_on_when_off: defaults.turn_on_when_off,
             },
         }
     }
@@ -120,4 +123,5 @@ pub struct EffectiveNightMode {
     pub color_temp_k: u16,
     pub brightness: u8,
     pub motion_timeout_secs: u64,
+    pub turn_on_when_off: bool,
 }
