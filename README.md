@@ -375,6 +375,21 @@ Or with Docker (no local Rust toolchain needed):
 docker build -t jeha .
 ```
 
+## Versioning
+
+jeha uses calendar versioning in the form `YY.MM.MICRO` — the year, the month, and a counter for releases cut within that month. `26.9.0` is the first release of September 2026. Months are not zero-padded, so that the version is also a valid SemVer string that Cargo and Docker can order.
+
+The version describes when a build was cut, not what it guarantees about compatibility. Config compatibility is tracked separately by `schema_version`, which is validated at startup and migrated with `jeha migrate`.
+
+Releases are tagged `vYY.MM.MICRO` and published as Docker tags of the same name alongside `latest`:
+
+```sh
+docker pull vpetersson/jeha:v26.9.0   # pinned
+docker pull vpetersson/jeha:latest    # tip of master
+```
+
+See [ADR-0003](doc/adr/0003-adopt-calendar-versioning.md) for the reasoning.
+
 ## License
 
 GPL-3.0
