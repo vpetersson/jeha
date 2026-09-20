@@ -1,10 +1,43 @@
 use std::fmt;
 use std::str::FromStr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, bail};
 use chrono::{Datelike, Timelike, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
+
+/// Time from `now` until the next wall-clock multiple of `period`.
+fn delay_to_next_boundary(now: SystemTime, period: Duration) -> Duration {
+    let period_ns = period.as_nanos();
+    if period_ns == 0 {
+        return Duration::ZERO;
+    }
+    let since_epoch = now
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_nanos();
+    match since_epoch % period_ns {
+        0 => Duration::ZERO,
+        remainder => Duration::from_nanos(u64::try_from(period_ns - remainder).unwrap_or(0)),
+    }
+}
+
+/// A `period`-spaced interval whose ticks land on wall-clock boundaries.
+///
+/// `tokio::time::interval` counts from whenever the task was spawned, so a 30s
+/// tick started at 21:43:46.166 fires at :16.166 and :46.166 past every minute
+/// for the life of the process. Time-of-day tasks polling on top of that then
+/// act at a fixed but arbitrary offset into their target minute — a daemon
+/// started at 21:43:46.166 ran lights-out at 01:00:16.168 every night. Anchor
+/// the first tick to the next boundary so the offset comes from the clock
+/// rather than from the last restart.
+pub fn aligned_interval(period: Duration) -> tokio::time::Interval {
+    tokio::time::interval_at(
+        tokio::time::Instant::now() + delay_to_next_boundary(SystemTime::now(), period),
+        period,
+    )
+}
 
 /// Validated "HH:MM" time representation stored as minutes since midnight.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -274,6 +307,43 @@ mod tests {
             weekday,
             month,
         }
+    }
+
+    #[test]
+    fn test_delay_to_next_boundary_aligns_to_wall_clock() {
+        let period = Duration::from_secs(30);
+
+        // 21:43:46.166875 past the epoch — the start time that made the
+        // production daemon fire lights-out at 01:00:16.168 every night.
+        let offset = Duration::from_secs(21 * 3600 + 43 * 60 + 46) + Duration::from_micros(166_875);
+        let delay = delay_to_next_boundary(UNIX_EPOCH + offset, period);
+        assert_eq!(
+            delay,
+            Duration::from_secs(13) + Duration::from_micros(833_125)
+        );
+
+        // Landing exactly on a boundary must not wait a whole extra period.
+        assert_eq!(
+            delay_to_next_boundary(UNIX_EPOCH + Duration::from_secs(60), period),
+            Duration::ZERO
+        );
+
+        // Every result lands the next tick on a multiple of the period.
+        for micros in [1u64, 999_999, 15_000_000, 29_999_999] {
+            let now = UNIX_EPOCH + Duration::from_secs(1_000_000) + Duration::from_micros(micros);
+            let delay = delay_to_next_boundary(now, period);
+            let next = (now + delay).duration_since(UNIX_EPOCH).unwrap();
+            assert!(delay < period, "delay {delay:?} should be under one period");
+            assert_eq!(next.as_nanos() % period.as_nanos(), 0);
+        }
+    }
+
+    #[test]
+    fn test_delay_to_next_boundary_zero_period_does_not_panic() {
+        assert_eq!(
+            delay_to_next_boundary(UNIX_EPOCH + Duration::from_secs(5), Duration::ZERO),
+            Duration::ZERO
+        );
     }
 
     #[test]

@@ -52,7 +52,7 @@ impl LightsOutTask {
         );
 
         let mut last_fired_date: Option<u32> = None;
-        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        let mut interval = crate::schedule::aligned_interval(Duration::from_secs(30));
 
         loop {
             tokio::select! {
