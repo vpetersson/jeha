@@ -35,8 +35,8 @@ pub async fn run_daemon(
     mqtt_topic: Option<String>,
     api: ApiOverrides,
 ) -> Result<()> {
-    // 1. Parse + validate config
-    let mut loaded_config = config::load_config(config_path)?;
+    // 1. Parse config, apply overrides, then validate what will actually run
+    let mut loaded_config = config::read_config(config_path)?;
 
     // Apply CLI/env overrides
     if let Some(host) = mqtt_host {
@@ -57,7 +57,7 @@ pub async fn run_daemon(
     if let Some(token) = api.token {
         loaded_config.api.token = Some(token);
     }
-    config::validate::validate_api(&loaded_config.api)?;
+    config::validate::validate_config(&loaded_config)?;
 
     if loaded_config.general.latitude.is_none() && loaded_config.general.geoip_lookup {
         resolve_latitude(&mut loaded_config, config_path).await;

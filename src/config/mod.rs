@@ -10,10 +10,16 @@ use anyhow::Result;
 use types::AppConfig;
 
 pub fn load_config(path: &Path) -> Result<AppConfig> {
-    let content = std::fs::read_to_string(path)?;
-    let config: AppConfig = toml::from_str(&content)?;
+    let config = read_config(path)?;
     validate::validate_config(&config)?;
     Ok(config)
+}
+
+/// Parse the config file without validating it, for callers that change it
+/// (CLI/env overrides) before checking the result.
+pub fn read_config(path: &Path) -> Result<AppConfig> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(toml::from_str(&content)?)
 }
 
 /// Write `content` to the config file, atomically where possible (temp file + rename).

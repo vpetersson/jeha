@@ -182,7 +182,7 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
-/// Checks the `[api]` section. Called again after CLI/env overrides are applied.
+/// Checks the `[api]` section.
 pub fn validate_api(api: &ApiConfig) -> Result<()> {
     if !api.enabled {
         return Ok(());

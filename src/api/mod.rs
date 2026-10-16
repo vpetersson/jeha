@@ -7,7 +7,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
+use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, HOST, ORIGIN};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
@@ -122,7 +122,35 @@ pub fn router(app_state: Arc<AppState>, api: &ApiConfig) -> Router {
     protected
         .merge(public)
         .fallback(not_found)
+        .method_not_allowed_fallback(method_not_allowed)
+        .layer(middleware::from_fn(reject_cross_origin))
         .with_state(app_state)
+}
+
+/// A browser sends a body-less POST to another origin without a CORS
+/// preflight, so without this any web page could switch lights on a daemon
+/// that has no token. Browsers always send `Origin` on POST; curl, Home
+/// Assistant and other non-browser clients don't, and the Swagger UI is
+/// same-origin, so none of them are affected.
+async fn reject_cross_origin(request: Request, next: Next) -> Response {
+    if request.method().is_safe() {
+        return next.run(request).await;
+    }
+    let headers = request.headers();
+    let Some(origin) = headers.get(ORIGIN) else {
+        return next.run(request).await;
+    };
+    let origin_host = origin
+        .to_str()
+        .ok()
+        .and_then(|o| o.split_once("://"))
+        .map(|(_, host)| host);
+    let host = headers.get(HOST).and_then(|h| h.to_str().ok());
+    match (origin_host, host) {
+        (Some(o), Some(h)) if o.eq_ignore_ascii_case(h) => next.run(request).await,
+        _ => ApiError::Forbidden("Cross-origin requests are not allowed.".to_string())
+            .into_response(),
+    }
 }
 
 async fn require_token(State(token): State<Arc<String>>, request: Request, next: Next) -> Response {
@@ -130,7 +158,9 @@ async fn require_token(State(token): State<Arc<String>>, request: Request, next:
         .headers()
         .get(AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
+        .and_then(|v| v.split_once(' '))
+        .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
+        .map(|(_, token)| token.trim_start_matches(' '));
     match presented {
         Some(presented) if constant_time_eq(presented.as_bytes(), token.as_bytes()) => {
             next.run(request).await
@@ -152,6 +182,14 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 async fn not_found(request: Request) -> ApiError {
     ApiError::NotFound(format!(
         "No such endpoint: {} {}. See /api/docs for the API reference.",
+        request.method(),
+        request.uri().path()
+    ))
+}
+
+async fn method_not_allowed(request: Request) -> ApiError {
+    ApiError::MethodNotAllowed(format!(
+        "{} is not supported on {}. See /api/docs for the API reference.",
         request.method(),
         request.uri().path()
     ))
@@ -361,6 +399,86 @@ lights = ["0x001788010AAAAAA1"]
         assert_eq!(status, StatusCode::OK);
         let (status, _) = send(&app, Method::GET, "/api/openapi.json", None, None).await;
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_bearer_scheme_is_case_insensitive() {
+        let api = ApiConfig {
+            token: Some("s3cret".to_string()),
+            ..ApiConfig::default()
+        };
+        let (app, _eventloop) = test_router(&api);
+        for (header, expected) in [
+            ("bearer s3cret", StatusCode::OK),
+            ("BEARER   s3cret", StatusCode::OK),
+            ("Bearer S3CRET", StatusCode::UNAUTHORIZED),
+            ("Basic s3cret", StatusCode::UNAUTHORIZED),
+        ] {
+            let req = Request::builder()
+                .uri("/api/system")
+                .header(AUTHORIZATION, header)
+                .body(Body::empty())
+                .unwrap();
+            let res = app.clone().oneshot(req).await.unwrap();
+            assert_eq!(res.status(), expected, "{}", header);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cross_origin_actions_are_rejected() {
+        let (app, _eventloop) = test_router(&ApiConfig::default());
+        let post = |origin: &str| {
+            Request::builder()
+                .method(Method::POST)
+                .uri("/api/rooms/kitchen/light/off")
+                .header(HOST, "localhost:8420")
+                .header(ORIGIN, origin)
+                .body(Body::empty())
+                .unwrap()
+        };
+
+        let res = app
+            .clone()
+            .oneshot(post("https://evil.example"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        let res = app.clone().oneshot(post("null")).await.unwrap();
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // Same origin (the Swagger UI) and no Origin at all (curl) both work.
+        let res = app
+            .clone()
+            .oneshot(post("http://localhost:8420"))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let (status, _) = send(
+            &app,
+            Method::POST,
+            "/api/rooms/kitchen/light/off",
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Reads are left alone: the browser won't let the page see the response.
+        let req = Request::builder()
+            .uri("/api/health")
+            .header(ORIGIN, "https://evil.example")
+            .body(Body::empty())
+            .unwrap();
+        let res = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_wrong_method_is_json() {
+        let (app, _eventloop) = test_router(&ApiConfig::default());
+        let (status, body) = send(&app, Method::POST, "/api/health", None, None).await;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(body["error"].as_str().unwrap().contains("POST"));
     }
 
     #[tokio::test]

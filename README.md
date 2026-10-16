@@ -291,7 +291,7 @@ token = "change-me"         # require "Authorization: Bearer change-me" (default
 docs = true                 # serve /api/openapi.json and Swagger UI at /api/docs
 ```
 
-Set `token` before binding to anything other than localhost; jeha logs a warning if you don't. `/api/health` and the docs never need the token.
+Set `token` before binding to anything other than localhost; jeha logs a warning if you don't. `/api/health` and the docs never need the token. Browser requests that change state from another origin (a `POST` with a foreign `Origin` header) are refused with 403, so a web page can't switch your lights through a token-less API.
 
 ## CLI
 
