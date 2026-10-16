@@ -93,6 +93,13 @@ pub fn router(app_state: Arc<AppState>, api: &ApiConfig) -> Router {
         )
         .route("/api/scenes", get(handlers::list_scenes))
         .route("/api/circadian", get(handlers::get_circadian_status))
+        .route(
+            "/api/circadian/schedule",
+            get(handlers::get_schedule)
+                .put(handlers::set_schedule)
+                .delete(handlers::reset_schedule),
+        )
+        .route("/api/night-mode", post(handlers::set_house_night_mode))
         .route("/api/system", get(handlers::get_system_status));
 
     if let Some(token) = api.token.clone() {
@@ -211,6 +218,13 @@ schema_version = 1
 [rooms.kitchen]
 display_name = "Kitchen"
 lights = ["0x001788010AAAAAA1"]
+
+[rooms.den]
+display_name = "Den"
+lights = ["0x001788010AAAAAA2"]
+
+[rooms.den.circadian]
+sleep_time = "21:00"
 "#;
 
     /// The returned event loop is never polled, but has to stay alive: it owns
@@ -219,7 +233,17 @@ lights = ["0x001788010AAAAAA1"]
         let config: AppConfig = toml::from_str(CONFIG).unwrap();
         let config = Arc::new(config);
         let state = crate::state::new_shared_state();
-        let (state_tx, _state_rx) = mpsc::channel(64);
+        {
+            let mut initial = (**state.load()).clone();
+            for room_id in config.rooms.keys() {
+                initial.rooms.entry(room_id.clone()).or_default();
+            }
+            state.store(Arc::new(initial));
+        }
+        let event_bus = EventBus::new(16);
+        let (state_manager, state_tx) =
+            crate::state::StateManager::new(state.clone(), event_bus.clone());
+        tokio::spawn(state_manager.run());
         let (client, eventloop) =
             rumqttc::AsyncClient::new(rumqttc::MqttOptions::new("test", "localhost", 1883), 64);
         let publisher = Arc::new(Publisher::new(
@@ -229,12 +253,7 @@ lights = ["0x001788010AAAAAA1"]
             config.clone(),
         ));
         let app_state = Arc::new(AppState::new(
-            state,
-            state_tx,
-            publisher,
-            config,
-            EventBus::new(16),
-            None,
+            state, state_tx, publisher, config, event_bus, None,
         ));
         (router(app_state, api), eventloop)
     }
@@ -392,7 +411,7 @@ lights = ["0x001788010AAAAAA1"]
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         let (status, body) = send(&app, Method::GET, "/api/system", Some("s3cret"), None).await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["room_count"], 0);
+        assert_eq!(body["room_count"], 2);
 
         // Health and docs stay open.
         let (status, _) = send(&app, Method::GET, "/api/health", None, None).await;
@@ -517,13 +536,18 @@ lights = ["0x001788010AAAAAA1"]
         let mut checked = 0;
         for (path, item) in &spec.paths.paths {
             let uri = path.replace("{room_id}", "kitchen");
-            for (method, op) in [(Method::GET, &item.get), (Method::POST, &item.post)] {
+            for (method, op) in [
+                (Method::GET, &item.get),
+                (Method::POST, &item.post),
+                (Method::PUT, &item.put),
+                (Method::DELETE, &item.delete),
+            ] {
                 if op.is_none() {
                     continue;
                 }
                 // An empty JSON object gets past routing without publishing anything
                 // for most actions; all we care about is that it's not the fallback.
-                let body = (method == Method::POST).then(|| json!({}));
+                let body = (method == Method::POST || method == Method::PUT).then(|| json!({}));
                 let (status, body) = send(&app, method.clone(), &uri, None, body).await;
                 let fallback = body["error"]
                     .as_str()
@@ -537,6 +561,94 @@ lights = ["0x001788010AAAAAA1"]
                 checked += 1;
             }
         }
-        assert_eq!(checked, 15);
+        assert_eq!(checked, 19);
+    }
+
+    /// Lets the state actor apply commands the handlers sent.
+    async fn settle() {
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+
+    #[tokio::test]
+    async fn test_house_schedule() {
+        let (app, _eventloop) = test_router(&ApiConfig::default());
+        let (status, body) = send(&app, Method::GET, "/api/circadian/schedule", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["wake_time"], "06:00");
+        assert_eq!(body["wake_time_source"], "config");
+
+        let (status, body) = send(
+            &app,
+            Method::PUT,
+            "/api/circadian/schedule",
+            None,
+            Some(json!({"wake_time": "07:15"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", body);
+        assert_eq!(body["wake_time"], "07:15");
+        assert_eq!(body["wake_time_source"], "api");
+        assert_eq!(body["sleep_time"], "23:00");
+        assert_eq!(body["sleep_time_source"], "config");
+        assert_eq!(body["rooms_with_own_schedule"], json!(["den"]));
+
+        settle().await;
+        let (_, body) = send(&app, Method::GET, "/api/circadian/schedule", None, None).await;
+        assert_eq!(body["wake_time"], "07:15");
+
+        let (status, _) = send(
+            &app,
+            Method::PUT,
+            "/api/circadian/schedule",
+            None,
+            Some(json!({"sleep_time": "25:00"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, body) =
+            send(&app, Method::DELETE, "/api/circadian/schedule", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["wake_time"], "06:00");
+        settle().await;
+        let (_, body) = send(&app, Method::GET, "/api/circadian/schedule", None, None).await;
+        assert_eq!(body["wake_time_source"], "config");
+    }
+
+    #[tokio::test]
+    async fn test_house_night_mode() {
+        let (app, _eventloop) = test_router(&ApiConfig::default());
+        let (status, body) = send(
+            &app,
+            Method::POST,
+            "/api/night-mode",
+            None,
+            Some(json!({"active": true})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", body);
+        assert_eq!(body["status"], "ok");
+        assert_eq!(body["rooms"], json!(["den", "kitchen"]));
+
+        settle().await;
+        let (_, rooms) = send(&app, Method::GET, "/api/rooms", None, None).await;
+        for room in rooms.as_array().unwrap() {
+            assert_eq!(room["night_mode"], true, "{}", room["room_id"]);
+        }
+
+        let (status, body) = send(
+            &app,
+            Method::POST,
+            "/api/night-mode",
+            None,
+            Some(json!({"active": false})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", body);
+        settle().await;
+        let (_, rooms) = send(&app, Method::GET, "/api/rooms", None, None).await;
+        for room in rooms.as_array().unwrap() {
+            assert_eq!(room["night_mode"], false, "{}", room["room_id"]);
+        }
     }
 }

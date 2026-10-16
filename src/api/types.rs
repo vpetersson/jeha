@@ -277,3 +277,64 @@ pub struct Z2mSceneList {
     pub scenes: Vec<Z2mScene>,
     pub description: String,
 }
+
+/// Set the house-wide wake and sleep times. A field that is left out falls
+/// back to `circadian.defaults` in config.toml.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetScheduleRequest {
+    /// Wake time, `HH:MM` (24h).
+    #[schema(example = "06:45")]
+    pub wake_time: Option<String>,
+    /// Sleep time, `HH:MM` (24h).
+    #[schema(example = "22:30")]
+    pub sleep_time: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleSource {
+    /// Set through the API.
+    Api,
+    /// From `circadian.defaults` in config.toml.
+    Config,
+}
+
+/// The house-wide circadian schedule.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct ScheduleResponse {
+    #[schema(example = "06:45")]
+    pub wake_time: String,
+    pub wake_time_source: ScheduleSource,
+    #[schema(example = "22:30")]
+    pub sleep_time: String,
+    pub sleep_time_source: ScheduleSource,
+    /// Rooms that set their own `wake_time` or `sleep_time` in config.toml.
+    /// The house-wide schedule doesn't change those times for them.
+    pub rooms_with_own_schedule: Vec<String>,
+    pub description: String,
+}
+
+/// Switch night mode on or off for every room.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetHouseNightModeRequest {
+    pub active: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct RoomError {
+    pub room: String,
+    pub error: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct HouseNightModeResponse {
+    /// `ok` when every room switched, `partial` when some failed.
+    #[schema(example = "ok")]
+    pub status: String,
+    pub night_mode: bool,
+    /// Rooms that were switched.
+    pub rooms: Vec<String>,
+    /// Rooms that failed, with the reason.
+    pub failed: Vec<RoomError>,
+    pub description: String,
+}

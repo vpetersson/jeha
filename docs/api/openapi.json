@@ -844,6 +844,178 @@
         }
       }
     },
+    "/api/circadian/schedule": {
+      "get": {
+        "tags": [
+          "circadian"
+        ],
+        "summary": "Get the house-wide circadian schedule.",
+        "operationId": "get_schedule",
+        "responses": {
+          "200": {
+            "description": "Current wake and sleep times",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "circadian"
+        ],
+        "summary": "Set the house-wide wake and sleep times.",
+        "description": "Replaces `wake_time`/`sleep_time` from `circadian.defaults` for every room\nthat doesn't set its own in config.toml. Meant to be synced from another\nsystem (e.g. Home Assistant) when the times vary from day to day. A field\nleft out goes back to the config value. Lights follow on the next circadian\nupdate. The times are kept in memory only: after a restart jeha uses\nconfig.toml again until they are set again.",
+        "operationId": "set_schedule",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetScheduleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Schedule updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid time or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "circadian"
+        ],
+        "summary": "Reset the house-wide schedule to config.toml.",
+        "operationId": "reset_schedule",
+        "responses": {
+          "200": {
+            "description": "Schedule reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScheduleResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/night-mode": {
+      "post": {
+        "tags": [
+          "night_mode"
+        ],
+        "summary": "Switch night mode on or off for the whole house.",
+        "description": "Same as `POST /api/rooms/{room_id}/night-mode` for every room, so an\nautomation doesn't need updating when rooms are added. A room that fails\ndoesn't stop the others; it's listed under `failed`.",
+        "operationId": "set_house_night_mode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetHouseNightModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Night mode switched in all or some rooms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HouseNightModeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "No room could be switched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/system": {
       "get": {
         "tags": [
@@ -1074,6 +1246,43 @@
           }
         }
       },
+      "HouseNightModeResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "night_mode",
+          "rooms",
+          "failed",
+          "description"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "`ok` when every room switched, `partial` when some failed.",
+            "example": "ok"
+          },
+          "night_mode": {
+            "type": "boolean"
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Rooms that were switched."
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RoomError"
+            },
+            "description": "Rooms that failed, with the reason."
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
       "LightOffRequest": {
         "type": "object",
         "description": "Turn a room's lights off. The body is optional.",
@@ -1286,6 +1495,21 @@
           }
         }
       },
+      "RoomError": {
+        "type": "object",
+        "required": [
+          "room",
+          "error"
+        ],
+        "properties": {
+          "room": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
       "RoomSummary": {
         "type": "object",
         "description": "A room as listed by `GET /api/rooms`.",
@@ -1368,6 +1592,63 @@
           }
         }
       },
+      "ScheduleResponse": {
+        "type": "object",
+        "description": "The house-wide circadian schedule.",
+        "required": [
+          "wake_time",
+          "wake_time_source",
+          "sleep_time",
+          "sleep_time_source",
+          "rooms_with_own_schedule",
+          "description"
+        ],
+        "properties": {
+          "wake_time": {
+            "type": "string",
+            "example": "06:45"
+          },
+          "wake_time_source": {
+            "$ref": "#/components/schemas/ScheduleSource"
+          },
+          "sleep_time": {
+            "type": "string",
+            "example": "22:30"
+          },
+          "sleep_time_source": {
+            "$ref": "#/components/schemas/ScheduleSource"
+          },
+          "rooms_with_own_schedule": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Rooms that set their own `wake_time` or `sleep_time` in config.toml.\nThe house-wide schedule doesn't change those times for them."
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "ScheduleSource": {
+        "type": "string",
+        "enum": [
+          "api",
+          "config"
+        ]
+      },
+      "SetHouseNightModeRequest": {
+        "type": "object",
+        "description": "Switch night mode on or off for every room.",
+        "required": [
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          }
+        }
+      },
       "SetNightModeRequest": {
         "type": "object",
         "description": "Switch night mode on or off.",
@@ -1401,6 +1682,28 @@
             "description": "Minutes until circadian takes over again. Without it, the scene stays\nuntil circadian is resumed.",
             "maximum": 10080,
             "exclusiveMinimum": 0
+          }
+        }
+      },
+      "SetScheduleRequest": {
+        "type": "object",
+        "description": "Set the house-wide wake and sleep times. A field that is left out falls\nback to `circadian.defaults` in config.toml.",
+        "properties": {
+          "wake_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Wake time, `HH:MM` (24h).",
+            "example": "06:45"
+          },
+          "sleep_time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sleep time, `HH:MM` (24h).",
+            "example": "22:30"
           }
         }
       },

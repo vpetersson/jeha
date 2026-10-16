@@ -370,7 +370,8 @@ impl NightModeScheduler {
                 continue;
             }
 
-            let defaults = room_config.effective_circadian(&self.config.circadian.defaults);
+            let defaults = room_config
+                .effective_circadian(&current.circadian_defaults(&self.config.circadian.defaults));
             let wake_minutes = parse_time_to_minutes(&defaults.wake_time);
             let current_minutes = now.minutes as u32;
 
@@ -429,7 +430,8 @@ impl NightModeScheduler {
                 continue;
             }
 
-            let defaults = room_config.effective_circadian(&self.config.circadian.defaults);
+            let defaults = room_config
+                .effective_circadian(&current.circadian_defaults(&self.config.circadian.defaults));
             let wake_minutes = parse_time_to_minutes(&defaults.wake_time);
             let current_minutes = now.minutes as u32;
 

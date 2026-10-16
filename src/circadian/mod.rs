@@ -135,7 +135,12 @@ impl CircadianEngine {
     }
 
     fn params_for_room(&self, room_config: &RoomConfig) -> CircadianParams {
-        let defaults = room_config.effective_circadian(&self.config.circadian.defaults);
+        let defaults = room_config.effective_circadian(
+            &self
+                .state
+                .load()
+                .circadian_defaults(&self.config.circadian.defaults),
+        );
         let weight = self.winter_weight();
         let (winter_start, winter_peak, winter_end) = defaults.winter_targets();
         CircadianParams {

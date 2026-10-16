@@ -167,9 +167,36 @@ pub struct SystemState {
     pub mqtt_connected: bool,
     pub z2m_online: bool,
     pub started_at: Option<Instant>,
+    /// Wake/sleep times set at runtime through the API.
+    pub schedule_override: ScheduleOverride,
+}
+
+/// Wake and sleep times set at runtime (`PUT /api/circadian/schedule`). They
+/// replace `circadian.defaults`, so rooms with their own times in config keep
+/// them. Not persisted: a restart goes back to the config file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScheduleOverride {
+    pub wake_time: Option<String>,
+    pub sleep_time: Option<String>,
 }
 
 impl SystemState {
+    /// `circadian.defaults` with the runtime wake/sleep override applied.
+    /// Pass the result to `RoomConfig::effective_circadian`.
+    pub fn circadian_defaults(
+        &self,
+        defaults: &crate::config::types::CircadianDefaults,
+    ) -> crate::config::types::CircadianDefaults {
+        let mut d = defaults.clone();
+        if let Some(ref wake) = self.schedule_override.wake_time {
+            d.wake_time = wake.clone();
+        }
+        if let Some(ref sleep) = self.schedule_override.sleep_time {
+            d.sleep_time = sleep.clone();
+        }
+        d
+    }
+
     /// Whether a device is available per Z2M availability topics.
     /// Unknown devices default to available (availability may be disabled in Z2M).
     pub fn is_device_available(&self, ieee: &str) -> bool {
@@ -199,6 +226,7 @@ pub enum StateCommand {
     },
     SetMqttConnected(bool),
     SetZ2mOnline(bool),
+    SetScheduleOverride(ScheduleOverride),
 }
 
 pub enum RoomStateUpdate {
@@ -471,6 +499,9 @@ impl StateManager {
                 StateCommand::SetZ2mOnline(online) => {
                     current.z2m_online = online;
                 }
+                StateCommand::SetScheduleOverride(schedule) => {
+                    current.schedule_override = schedule;
+                }
             }
             self.state.store(Arc::new(current));
             for event in availability_events {
@@ -692,5 +723,32 @@ mod tests {
             .unwrap();
         wait_until(&state, |s| s.device_map.is_empty()).await;
         assert!(state.load().is_device_available("0xAA"));
+    }
+
+    #[test]
+    fn test_schedule_override_replaces_defaults_not_room_times() {
+        use crate::config::types::{CircadianDefaults, RoomConfig};
+
+        let state = SystemState {
+            schedule_override: ScheduleOverride {
+                wake_time: Some("07:30".to_string()),
+                sleep_time: None,
+            },
+            ..SystemState::default()
+        };
+        let defaults = state.circadian_defaults(&CircadianDefaults::default());
+        assert_eq!(defaults.wake_time, "07:30");
+        assert_eq!(defaults.sleep_time, "23:00");
+
+        // A room with its own wake_time in config keeps it.
+        let room: RoomConfig = toml::from_str(
+            r#"
+lights = ["0x001788010AAAAAA1"]
+[circadian]
+wake_time = "05:00"
+"#,
+        )
+        .unwrap();
+        assert_eq!(room.effective_circadian(&defaults).wake_time, "05:00");
     }
 }

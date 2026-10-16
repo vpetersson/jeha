@@ -13,7 +13,7 @@ use crate::circadian::CircadianEngine;
 use crate::config::types::AppConfig;
 use crate::event::EventBus;
 use crate::mqtt::publish::Publisher;
-use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
+use crate::state::{RoomStateUpdate, ScheduleOverride, SharedState, StateCommand, UpdateSource};
 
 use super::types::*;
 
@@ -1375,4 +1375,217 @@ fn format_duration(secs: u64) -> String {
     } else {
         format!("{}m", mins)
     }
+}
+
+// --- House-wide schedule and night mode ---
+
+impl AppState {
+    fn schedule_response(&self, schedule: &ScheduleOverride) -> ScheduleResponse {
+        let defaults = &self.config.circadian.defaults;
+        let source = |o: &Option<String>| {
+            if o.is_some() {
+                ScheduleSource::Api
+            } else {
+                ScheduleSource::Config
+            }
+        };
+        let mut rooms_with_own_schedule: Vec<String> = self
+            .config
+            .rooms
+            .iter()
+            .filter(|(_, r)| {
+                r.circadian
+                    .as_ref()
+                    .is_some_and(|c| c.wake_time.is_some() || c.sleep_time.is_some())
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        rooms_with_own_schedule.sort();
+        let wake_time = schedule
+            .wake_time
+            .clone()
+            .unwrap_or_else(|| defaults.wake_time.clone());
+        let sleep_time = schedule
+            .sleep_time
+            .clone()
+            .unwrap_or_else(|| defaults.sleep_time.clone());
+        let description = format!(
+            "Circadian wakes at {} and winds down for {}.",
+            wake_time, sleep_time
+        );
+        ScheduleResponse {
+            wake_time,
+            wake_time_source: source(&schedule.wake_time),
+            sleep_time,
+            sleep_time_source: source(&schedule.sleep_time),
+            rooms_with_own_schedule,
+            description,
+        }
+    }
+}
+
+/// Get the house-wide circadian schedule.
+#[utoipa::path(
+    get,
+    path = "/api/circadian/schedule",
+    tag = "circadian",
+    responses(
+        (status = 200, description = "Current wake and sleep times", body = ScheduleResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn get_schedule(State(app): State<Arc<AppState>>) -> Json<ScheduleResponse> {
+    let current = app.state.load();
+    Json(app.schedule_response(&current.schedule_override))
+}
+
+/// Set the house-wide wake and sleep times.
+///
+/// Replaces `wake_time`/`sleep_time` from `circadian.defaults` for every room
+/// that doesn't set its own in config.toml. Meant to be synced from another
+/// system (e.g. Home Assistant) when the times vary from day to day. A field
+/// left out goes back to the config value. Lights follow on the next circadian
+/// update. The times are kept in memory only: after a restart jeha uses
+/// config.toml again until they are set again.
+#[utoipa::path(
+    put,
+    path = "/api/circadian/schedule",
+    tag = "circadian",
+    request_body = SetScheduleRequest,
+    responses(
+        (status = 200, description = "Schedule updated", body = ScheduleResponse),
+        (status = 400, description = "Invalid time or body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn set_schedule(
+    State(app): State<Arc<AppState>>,
+    ApiJson(body): ApiJson<SetScheduleRequest>,
+) -> Result<Json<ScheduleResponse>, ApiError> {
+    for (field, value) in [
+        ("wake_time", &body.wake_time),
+        ("sleep_time", &body.sleep_time),
+    ] {
+        if let Some(v) = value {
+            crate::schedule::TimeOfDay::from_hm_str(v)
+                .map_err(|e| ApiError::BadRequest(format!("{}: {}", field, e)))?;
+        }
+    }
+    let schedule = ScheduleOverride {
+        wake_time: body.wake_time,
+        sleep_time: body.sleep_time,
+    };
+    let _ = app
+        .state_tx
+        .send(StateCommand::SetScheduleOverride(schedule.clone()))
+        .await;
+    Ok(Json(app.schedule_response(&schedule)))
+}
+
+/// Reset the house-wide schedule to config.toml.
+#[utoipa::path(
+    delete,
+    path = "/api/circadian/schedule",
+    tag = "circadian",
+    responses(
+        (status = 200, description = "Schedule reset", body = ScheduleResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn reset_schedule(
+    State(app): State<Arc<AppState>>,
+) -> Result<Json<ScheduleResponse>, ApiError> {
+    let schedule = ScheduleOverride::default();
+    let _ = app
+        .state_tx
+        .send(StateCommand::SetScheduleOverride(schedule.clone()))
+        .await;
+    Ok(Json(app.schedule_response(&schedule)))
+}
+
+/// Switch night mode on or off for the whole house.
+///
+/// Same as `POST /api/rooms/{room_id}/night-mode` for every room, so an
+/// automation doesn't need updating when rooms are added. A room that fails
+/// doesn't stop the others; it's listed under `failed`.
+#[utoipa::path(
+    post,
+    path = "/api/night-mode",
+    tag = "night_mode",
+    request_body = SetHouseNightModeRequest,
+    responses(
+        (status = 200, description = "Night mode switched in all or some rooms", body = HouseNightModeResponse),
+        (status = 400, description = "Invalid request body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 500, description = "No room could be switched", body = ErrorResponse),
+    )
+)]
+pub async fn set_house_night_mode(
+    State(app): State<Arc<AppState>>,
+    ApiJson(body): ApiJson<SetHouseNightModeRequest>,
+) -> Result<Json<HouseNightModeResponse>, ApiError> {
+    let mut room_ids: Vec<&String> = app.config.rooms.keys().collect();
+    room_ids.sort();
+
+    let mut rooms = Vec::new();
+    let mut failed = Vec::new();
+    for room_id in room_ids {
+        let room_config = &app.config.rooms[room_id];
+        let result = if body.active {
+            crate::night_mode::activate_night_mode(
+                room_id,
+                room_config,
+                &app.config,
+                &app.publisher,
+                &app.state,
+                &app.state_tx,
+                &app.event_bus,
+                crate::night_mode::NightModeTrigger::User,
+            )
+            .await
+        } else {
+            crate::night_mode::deactivate_night_mode(
+                room_id,
+                room_config,
+                &app.publisher,
+                &app.state,
+                &app.state_tx,
+                &app.event_bus,
+                &app.circadian_engine,
+            )
+            .await
+        };
+        match result {
+            Ok(()) => rooms.push(room_id.clone()),
+            Err(e) => failed.push(RoomError {
+                room: room_id.clone(),
+                error: e.to_string(),
+            }),
+        }
+    }
+
+    if rooms.is_empty() && !failed.is_empty() {
+        let errors: Vec<String> = failed
+            .iter()
+            .map(|f| format!("{}: {}", f.room, f.error))
+            .collect();
+        return Err(ApiError::Internal(format!(
+            "Night mode failed in every room: {}",
+            errors.join("; ")
+        )));
+    }
+
+    let state_word = if body.active { "on" } else { "off" };
+    let mut description = format!("Night mode {} in {} room(s).", state_word, rooms.len());
+    if !failed.is_empty() {
+        let names: Vec<&str> = failed.iter().map(|f| f.room.as_str()).collect();
+        description.push_str(&format!(" Failed in: {}.", names.join(", ")));
+    }
+    Ok(Json(HouseNightModeResponse {
+        status: if failed.is_empty() { "ok" } else { "partial" }.to_string(),
+        night_mode: body.active,
+        rooms,
+        failed,
+        description,
+    }))
 }

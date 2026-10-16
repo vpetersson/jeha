@@ -346,8 +346,10 @@ The spec is generated from the handler code, and a test fails if the checked-in 
 | `/api/rooms/{room_id}/circadian/resume` | POST | Resume circadian |
 | `/api/rooms/{room_id}/circadian/snooze` | POST | Pause circadian for N hours, auto-resume |
 | `/api/rooms/{room_id}/night-mode` | POST | Toggle night mode |
+| `/api/night-mode` | POST | Toggle night mode in every room at once |
 | `/api/scenes` | GET | Built-in scenes: bright, relax, movie, energize, nightlight |
 | `/api/circadian` | GET | Circadian status for all rooms |
+| `/api/circadian/schedule` | GET / PUT / DELETE | Read, set or reset the house-wide wake and sleep times |
 | `/api/system` | GET | MQTT/Z2M connection, uptime, device counts, version |
 | `/api/health` | GET | Liveness check (no token needed) |
 
@@ -360,7 +362,21 @@ curl -X POST localhost:8420/api/rooms/kitchen/light/on \
 curl -H 'Authorization: Bearer change-me' localhost:8420/api/rooms   # with api.token set
 ```
 
-Errors use HTTP status codes (400, 401, 404, 500) with an `{"error": "message"}` body.
+### Syncing from Home Assistant
+
+If your wake and sleep times change from day to day, push them to jeha instead of editing `config.toml`:
+
+```bash
+curl -X PUT localhost:8420/api/circadian/schedule \
+  -H 'Content-Type: application/json' -d '{"wake_time": "06:45", "sleep_time": "22:30"}'
+curl -X DELETE localhost:8420/api/circadian/schedule   # back to config.toml
+```
+
+The times replace `circadian.defaults` for every room that doesn't set its own `wake_time`/`sleep_time` in config, and the lights follow on the next circadian update. They're kept in memory only, so after a restart jeha uses `config.toml` until they're pushed again.
+
+To switch night mode for the whole house from a single toggle, use `POST /api/night-mode` with `{"active": true}` or `{"active": false}`. New rooms are picked up automatically.
+
+Errors use HTTP status codes (400, 401, 403, 404, 405, 500) with an `{"error": "message"}` body.
 
 ## Circadian curve
 
