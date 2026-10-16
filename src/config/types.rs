@@ -71,7 +71,9 @@ pub struct GeneralConfig {
     /// After this TTL, circadian resumes automatically. Default: 60.
     #[serde(default = "default_manual_override_ttl_mins")]
     pub manual_override_ttl_mins: u64,
-    /// Remote brightness step per click (1-254). Default: 25.
+    /// Remote brightness step per click (1-254), applied on a perceptual curve so
+    /// presses look even at low brightness. Hold-to-dim ramps at twice this per second.
+    /// Default: 25.
     #[serde(default = "default_remote_brightness_step")]
     pub remote_brightness_step: u8,
     /// Default illuminance threshold (lux) for motion-triggered lights.

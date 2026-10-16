@@ -76,7 +76,7 @@ motion_timeout_secs = 300             # Default motion timeout (5 min)
 external_brightness_tolerance = 15    # Brightness drift before detecting external change
 external_color_temp_tolerance = 25    # Color temp drift (mired) before detecting external change
 external_override_secs = 1800         # How long to pause circadian after external change (30 min)
-remote_brightness_step = 25           # Brightness step for remote dim up/down
+remote_brightness_step = 25           # Remote dim up/down step (perceptual, ~10% per press); hold ramps at 2x this per second
 ```
 
 ### Circadian defaults

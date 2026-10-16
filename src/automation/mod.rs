@@ -39,8 +39,8 @@ pub struct AutomationEngine {
     automations: HashMap<String, AutomationInfo>,
     /// Per-room handles for pending motion-off timers. Aborted on new motion events.
     motion_off_handles: HashMap<String, tokio::task::JoinHandle<()>>,
-    /// Per-room handles for continuous dimming (hold-to-dim). Aborted on brightness stop/release.
-    dimming_handles: HashMap<String, CancellationToken>,
+    /// Per-room hold-to-dim ramps in progress. Ended on brightness stop/release.
+    dimming_sessions: HashMap<String, DimSession>,
 }
 
 impl AutomationEngine {
@@ -63,7 +63,7 @@ impl AutomationEngine {
             circadian_engine,
             automations: HashMap::new(),
             motion_off_handles: HashMap::new(),
-            dimming_handles: HashMap::new(),
+            dimming_sessions: HashMap::new(),
         }
     }
 
@@ -539,6 +539,10 @@ impl AutomationEngine {
         };
 
         for (room_id, room_config) in &rooms {
+            // Any non-dimming action (on/off, night mode...) supersedes a ramp.
+            if !remote_action.is_dimming() {
+                self.dimming_sessions.remove(room_id);
+            }
             match remote_action {
                 RemoteActionType::Toggle => {
                     let current = self.state.load();
@@ -639,11 +643,13 @@ impl AutomationEngine {
                 }
 
                 RemoteActionType::BrightnessUpHold => {
-                    self.start_continuous_dimming(room_id.clone(), room_config.clone(), true);
+                    self.start_continuous_dimming(room_id, room_config, true)
+                        .await;
                 }
 
                 RemoteActionType::BrightnessDownHold => {
-                    self.start_continuous_dimming(room_id.clone(), room_config.clone(), false);
+                    self.start_continuous_dimming(room_id, room_config, false)
+                        .await;
                 }
 
                 RemoteActionType::NightMode => {
@@ -697,10 +703,7 @@ impl AutomationEngine {
                 }
 
                 RemoteActionType::BrightnessStop => {
-                    if let Some(token) = self.dimming_handles.remove(room_id) {
-                        token.cancel();
-                        debug!("Remote: stopped continuous dimming in '{}'", room_id);
-                    }
+                    self.stop_continuous_dimming(room_id, room_config).await;
                 }
             }
         }
@@ -708,31 +711,24 @@ impl AutomationEngine {
 
     /// Single-step brightness change (click). No-op when lights are off.
     async fn step_brightness(
-        &self,
+        &mut self,
         room_id: &str,
         room_config: &crate::config::types::RoomConfig,
         up: bool,
     ) {
+        // A click during a hold ends the ramp; continue from where it got to.
+        let ramp_end = self.stop_continuous_dimming(room_id, room_config).await;
+
         let current = self.state.load();
-        let lights_on = current
-            .rooms
-            .get(room_id)
-            .map(|rs| rs.lights_on)
-            .unwrap_or(false);
-        if !lights_on {
+        let Some(room_state) = current.rooms.get(room_id).filter(|rs| rs.lights_on) else {
             return;
-        }
-        let step = self.config.general.remote_brightness_step;
-        let current_brightness = current
-            .rooms
-            .get(room_id)
-            .and_then(|rs| rs.current_brightness)
-            .unwrap_or(128);
-        let new_brightness = if up {
-            current_brightness.saturating_add(step).min(254)
-        } else {
-            current_brightness.saturating_sub(step).max(1)
         };
+        let step = self.config.general.remote_brightness_step;
+        let current_brightness = ramp_end.unwrap_or_else(|| remote_base_brightness(room_state));
+        let new_brightness = perceptual_step(current_brightness, step, up);
+        if new_brightness == current_brightness {
+            return; // Already at min/max
+        }
 
         debug!(
             "Remote: brightness {} in '{}': {} -> {}",
@@ -745,116 +741,105 @@ impl AutomationEngine {
             .await;
     }
 
-    /// Start continuous dimming (hold). Repeats brightness steps every 300ms until cancelled.
-    /// No-op when lights are off.
-    fn start_continuous_dimming(
+    /// Start continuous dimming (hold) using the bulbs' native brightness ramp,
+    /// so the lights fade smoothly instead of being stepped by a stream of
+    /// commands. No-op when lights are off.
+    async fn start_continuous_dimming(
         &mut self,
-        room_id: String,
-        room_config: crate::config::types::RoomConfig,
+        room_id: &str,
+        room_config: &crate::config::types::RoomConfig,
         up: bool,
     ) {
-        let lights_on = self
-            .state
-            .load()
-            .rooms
-            .get(&room_id)
-            .map(|rs| rs.lights_on)
-            .unwrap_or(false);
-        if !lights_on {
+        // Some remotes (Hue dimmer) repeat the hold event while the button is
+        // held; restarting the ramp each time would make it stutter.
+        if self
+            .dimming_sessions
+            .get(room_id)
+            .is_some_and(|s| s.up == up && s.is_running())
+        {
             return;
         }
+        let ramp_end = self.stop_continuous_dimming(room_id, room_config).await;
 
-        // Cancel any existing dimming for this room
-        if let Some(token) = self.dimming_handles.remove(&room_id) {
-            token.cancel();
+        let current = self.state.load();
+        let Some(room_state) = current.rooms.get(room_id).filter(|rs| rs.lights_on) else {
+            return;
+        };
+        let start_brightness = ramp_end.unwrap_or_else(|| remote_base_brightness(room_state));
+        let rate = hold_dim_rate(self.config.general.remote_brightness_step);
+
+        // Pause circadian and persist the manual override, as for a click.
+        let _ = self
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::CircadianPause {
+                    paused: true,
+                    until: None,
+                },
+            })
+            .await;
+        let ttl = std::time::Duration::from_secs(self.config.general.manual_override_ttl_mins * 60);
+        let _ = self
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::ManualOverrideTtl {
+                    until: Some(std::time::Instant::now() + ttl),
+                },
+            })
+            .await;
+
+        let signed_rate = if up { rate as i16 } else { -(rate as i16) };
+        if let Err(e) = publish_brightness_move(&self.publisher, room_config, signed_rate).await {
+            error!("Remote: failed to start dimming in '{}': {}", room_id, e);
+            return;
         }
+        debug!(
+            "Remote: dimming {} in '{}' from {} at {}/s",
+            if up { "up" } else { "down" },
+            room_id,
+            start_brightness,
+            rate
+        );
+        self.dimming_sessions.insert(
+            room_id.to_string(),
+            DimSession {
+                up,
+                rate,
+                start_brightness,
+                started: std::time::Instant::now(),
+            },
+        );
+    }
 
-        let token = CancellationToken::new();
-        self.dimming_handles.insert(room_id.clone(), token.clone());
-
-        let state = self.state.clone();
-        let state_tx = self.state_tx.clone();
-        let publisher = self.publisher.clone();
-        let circadian_engine = self.circadian_engine.clone();
-        let step = self.config.general.remote_brightness_step;
-        let manual_ttl =
-            std::time::Duration::from_secs(self.config.general.manual_override_ttl_mins * 60);
-
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(300));
-            // First tick is immediate — pause circadian once up front
-            let _ = state_tx
-                .send(StateCommand::UpdateRoomState {
-                    room_id: room_id.clone(),
-                    update: RoomStateUpdate::CircadianPause {
-                        paused: true,
-                        until: None,
-                    },
-                })
-                .await;
-            let _ = state_tx
-                .send(StateCommand::UpdateRoomState {
-                    room_id: room_id.clone(),
-                    update: RoomStateUpdate::ManualOverrideTtl {
-                        until: Some(std::time::Instant::now() + manual_ttl),
-                    },
-                })
-                .await;
-
-            loop {
-                tokio::select! {
-                    _ = token.cancelled() => break,
-                    _ = interval.tick() => {
-                        let current_brightness = state
-                            .load()
-                            .rooms
-                            .get(&room_id)
-                            .and_then(|rs| rs.current_brightness)
-                            .unwrap_or(128);
-                        let new_brightness = if up {
-                            current_brightness.saturating_add(step).min(254)
-                        } else {
-                            current_brightness.saturating_sub(step).max(1)
-                        };
-
-                        if new_brightness == current_brightness {
-                            break; // Hit min/max
-                        }
-
-                        let action = ActionConfig::LightsOn {
-                            use_circadian: false,
-                            brightness: Some(new_brightness),
-                            color_temp_k: None,
-                            transition: Some(0),
-                        };
-                        if let Err(e) = action::execute_action(
-                            &action,
-                            &room_id,
-                            &room_config,
-                            &publisher,
-                            &state_tx,
-                            &circadian_engine,
-                        )
-                        .await
-                        {
-                            error!("Remote: continuous dim failed in '{}': {}", room_id, e);
-                            break;
-                        }
-                        // Flip source back to Manual after each step.
-                        let _ = state_tx
-                            .send(StateCommand::UpdateRoomState {
-                                room_id: room_id.clone(),
-                                update: RoomStateUpdate::LightsOn {
-                                    brightness: None,
-                                    color_temp_mired: None,
-                                    source: UpdateSource::Manual,
-                                },
-                            })
-                            .await;
-                    }
-                }
-            }
-        });
+    /// Stop a hold-to-dim ramp, if one is running, and record the brightness
+    /// it reached. Returns that brightness.
+    async fn stop_continuous_dimming(
+        &mut self,
+        room_id: &str,
+        room_config: &crate::config::types::RoomConfig,
+    ) -> Option<u8> {
+        let session = self.dimming_sessions.remove(room_id)?;
+        if let Err(e) = publish_brightness_move(&self.publisher, room_config, 0).await {
+            error!("Remote: failed to stop dimming in '{}': {}", room_id, e);
+        }
+        let reached = session.brightness_at(session.started.elapsed());
+        debug!("Remote: stopped dimming in '{}' at ~{}", room_id, reached);
+        // Record as a manual jeha push so the next step starts from here and
+        // the Z2M echoes of the ramp aren't treated as an external change.
+        let _ = self
+            .state_tx
+            .send(StateCommand::UpdateRoomState {
+                room_id: room_id.to_string(),
+                update: RoomStateUpdate::LightsOnWithPush {
+                    brightness: Some(reached),
+                    color_temp_mired: None,
+                    source: UpdateSource::Manual,
+                },
+            })
+            .await;
+        Some(reached)
     }
 
     /// Set brightness manually, pausing circadian. No-op when lights are off.
@@ -932,6 +917,121 @@ impl AutomationEngine {
                 },
             })
             .await;
+    }
+}
+
+/// How long after a jeha push its intended brightness is trusted over the
+/// Z2M-reported one. Echoes that arrive mid-transition (or carry per-bulb
+/// calibration offsets) would otherwise make consecutive steps jump around.
+const REMOTE_BASE_TRUST_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Brightness to step from for a remote press.
+fn remote_base_brightness(room_state: &crate::state::RoomState) -> u8 {
+    let recent_push = room_state
+        .last_jeha_push
+        .is_some_and(|t| t.elapsed() < REMOTE_BASE_TRUST_WINDOW);
+    let (first, second) = if recent_push {
+        (
+            room_state.intended_brightness,
+            room_state.current_brightness,
+        )
+    } else {
+        (
+            room_state.current_brightness,
+            room_state.intended_brightness,
+        )
+    };
+    first.or(second).unwrap_or(128)
+}
+
+/// Perceived-brightness exponent. Eyes are far more sensitive to changes in
+/// dim light, so a fixed raw step (e.g. 5 -> 30) looks like a flash at the low
+/// end but barely registers near full brightness.
+const PERCEPTUAL_GAMMA: f64 = 2.2;
+
+/// Step brightness by `step` (out of 254) in perceptual space, so each press
+/// looks like the same change whether the room is dim or bright. Always moves
+/// at least one unit unless already at the limit.
+fn perceptual_step(current: u8, step: u8, up: bool) -> u8 {
+    let current = current.clamp(1, 254);
+    let perceived = (current as f64 / 254.0).powf(1.0 / PERCEPTUAL_GAMMA);
+    let delta = step as f64 / 254.0;
+    let target = if up {
+        perceived + delta
+    } else {
+        perceived - delta
+    }
+    .clamp(0.0, 1.0);
+    let next = (target.powf(PERCEPTUAL_GAMMA) * 254.0)
+        .round()
+        .clamp(1.0, 254.0) as u8;
+    if up {
+        next.max(current.saturating_add(1)).min(254)
+    } else {
+        next.min(current.saturating_sub(1)).max(1)
+    }
+}
+
+/// Hold-to-dim ramp speed in brightness units per second: two clicks' worth
+/// per second, i.e. a full sweep in ~5s at the default step of 25.
+fn hold_dim_rate(step: u8) -> u8 {
+    step.saturating_mul(2).max(1)
+}
+
+/// A hold-to-dim ramp running on the bulbs.
+struct DimSession {
+    up: bool,
+    rate: u8,
+    start_brightness: u8,
+    started: std::time::Instant,
+}
+
+impl DimSession {
+    /// False once the ramp must have hit min/max, so a hold whose release was
+    /// missed doesn't block the next hold in the same direction.
+    fn is_running(&self) -> bool {
+        self.started.elapsed().as_secs_f64() < 254.0 / self.rate as f64
+    }
+
+    /// Estimated brightness after the ramp has run for `elapsed`.
+    fn brightness_at(&self, elapsed: std::time::Duration) -> u8 {
+        let moved = self.rate as f64 * elapsed.as_secs_f64();
+        let start = self.start_brightness as f64;
+        let b = if self.up {
+            start + moved
+        } else {
+            start - moved
+        };
+        b.round().clamp(1.0, 254.0) as u8
+    }
+}
+
+/// Start (rate != 0) or stop (rate == 0) a native brightness ramp on a room.
+async fn publish_brightness_move(
+    publisher: &Arc<Publisher>,
+    room_config: &crate::config::types::RoomConfig,
+    rate: i16,
+) -> anyhow::Result<()> {
+    if let Some(ref group) = room_config.z2m_group {
+        publisher.brightness_move_group(group, rate).await
+    } else {
+        for ieee in &room_config.lights {
+            publisher.brightness_move_ieee(ieee, rate).await?;
+        }
+        Ok(())
+    }
+}
+
+impl RemoteActionType {
+    fn is_dimming(self) -> bool {
+        matches!(
+            self,
+            Self::BrightnessUpStep
+                | Self::BrightnessDownStep
+                | Self::BrightnessUpHold
+                | Self::BrightnessDownHold
+                | Self::BrightnessStop
+        )
     }
 }
 
@@ -1063,6 +1163,94 @@ fn classify_remote_action(action: &str) -> Option<RemoteActionType> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Remote dimming math ---
+    #[test]
+    fn test_perceptual_step_small_at_low_end() {
+        // From a dim room a press must not jump straight to ~30 (a visible flash).
+        let next = perceptual_step(5, 25, true);
+        assert!(next > 5 && next <= 15, "5 -> {}", next);
+        // Near the top the same press is a much larger raw change.
+        let bright = perceptual_step(200, 25, true);
+        assert!(bright - 200 > next - 5, "200 -> {}", bright);
+    }
+
+    #[test]
+    fn test_perceptual_step_monotonic_and_bounded() {
+        let mut b = 1u8;
+        let mut presses = 0;
+        while b < 254 {
+            let next = perceptual_step(b, 25, true);
+            assert!(next > b);
+            b = next;
+            presses += 1;
+        }
+        assert!((9..=13).contains(&presses), "presses: {}", presses);
+        assert_eq!(perceptual_step(254, 25, true), 254);
+        while b > 1 {
+            let next = perceptual_step(b, 25, false);
+            assert!(next < b);
+            b = next;
+        }
+        assert_eq!(perceptual_step(1, 25, false), 1);
+    }
+
+    #[test]
+    fn test_perceptual_step_up_down_roughly_reversible() {
+        for b in [10u8, 50, 120, 200] {
+            let back = perceptual_step(perceptual_step(b, 25, true), 25, false);
+            assert!((back as i16 - b as i16).abs() <= 1, "{} -> {}", b, back);
+        }
+    }
+
+    #[test]
+    fn test_remote_base_prefers_recent_intended() {
+        let mut rs = crate::state::RoomState {
+            lights_on: true,
+            current_brightness: Some(60), // stale mid-transition echo
+            intended_brightness: Some(100),
+            last_jeha_push: Some(std::time::Instant::now()),
+            ..Default::default()
+        };
+        assert_eq!(remote_base_brightness(&rs), 100);
+
+        // Long after jeha's push, the reported value wins (external changes).
+        rs.last_jeha_push = Some(std::time::Instant::now() - REMOTE_BASE_TRUST_WINDOW * 2);
+        assert_eq!(remote_base_brightness(&rs), 60);
+
+        rs.current_brightness = None;
+        assert_eq!(remote_base_brightness(&rs), 100);
+        rs.intended_brightness = None;
+        assert_eq!(remote_base_brightness(&rs), 128);
+    }
+
+    #[test]
+    fn test_dim_session_estimate() {
+        let session = DimSession {
+            up: true,
+            rate: 50,
+            start_brightness: 100,
+            started: std::time::Instant::now(),
+        };
+        assert_eq!(
+            session.brightness_at(std::time::Duration::from_secs(1)),
+            150
+        );
+        assert_eq!(
+            session.brightness_at(std::time::Duration::from_secs(10)),
+            254
+        );
+        let down = DimSession {
+            up: false,
+            ..session
+        };
+        assert_eq!(
+            down.brightness_at(std::time::Duration::from_millis(500)),
+            75
+        );
+        assert_eq!(down.brightness_at(std::time::Duration::from_secs(10)), 1);
+        assert!(down.is_running());
+    }
 
     // --- IKEA STYRBAR (E2001/E2002/E2313) ---
     #[test]
