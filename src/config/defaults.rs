@@ -24,6 +24,7 @@ impl Default for GeneralConfig {
             remote_brightness_step: 25,
             illuminance_threshold: 100,
             latitude: None,
+            geoip_lookup: true,
         }
     }
 }

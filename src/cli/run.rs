@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::api;
 use crate::automation::AutomationEngine;
@@ -12,6 +12,7 @@ use crate::circadian::CircadianEngine;
 use crate::config;
 use crate::config_sync::ConfigSync;
 use crate::event::EventBus;
+use crate::geoip;
 use crate::lights_out::LightsOutTask;
 use crate::mqtt::MqttHandle;
 use crate::mqtt::publish::Publisher;
@@ -40,6 +41,10 @@ pub async fn run_daemon(
     }
     if let Some(bind) = api_bind {
         loaded_config.api.bind = bind;
+    }
+
+    if loaded_config.general.latitude.is_none() && loaded_config.general.geoip_lookup {
+        resolve_latitude(&mut loaded_config, config_path).await;
     }
 
     let app_config = Arc::new(loaded_config);
@@ -257,4 +262,38 @@ pub async fn run_daemon(
     info!("jeha stopped");
 
     Ok(())
+}
+
+/// Fill in `general.latitude` from GeoIP and save it to the config file. Never
+/// fails startup: without a latitude, winter mode stays off.
+async fn resolve_latitude(config: &mut config::types::AppConfig, config_path: &Path) {
+    let location = match geoip::lookup().await {
+        Ok(location) => location,
+        Err(e) => {
+            warn!(
+                "GeoIP lookup failed, winter mode disabled until next start: {}. Set general.latitude to skip the lookup.",
+                e
+            );
+            return;
+        }
+    };
+    let latitude = geoip::round_latitude(location.latitude);
+    info!(
+        "Location from GeoIP: {} (latitude {})",
+        location.place(),
+        latitude
+    );
+    config.general.latitude = Some(latitude);
+    match geoip::persist_latitude(config_path, latitude).await {
+        Ok(()) => info!(
+            "Saved general.latitude = {} to {}",
+            latitude,
+            config_path.display()
+        ),
+        Err(e) => warn!(
+            "Could not save latitude to {}: {}. It will be looked up again on next start.",
+            config_path.display(),
+            e
+        ),
+    }
 }

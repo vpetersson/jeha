@@ -77,7 +77,8 @@ external_brightness_tolerance = 15    # Brightness drift before detecting extern
 external_color_temp_tolerance = 25    # Color temp drift (mired) before detecting external change
 external_override_secs = 1800         # How long to pause circadian after external change (30 min)
 remote_brightness_step = 25           # Brightness step for remote dim up/down
-latitude = 59.33                      # Optional: enables winter mode (see below)
+latitude = 59.33                      # Winter mode; looked up automatically if unset (see below)
+geoip_lookup = true                   # Look up latitude from GeoIP when unset
 ```
 
 ### Circadian defaults
@@ -121,14 +122,23 @@ jeha auto-discovers new Z2M groups with lights and appends them to the config fi
 
 ### Winter mode
 
-Winter is darker than summer, so the same indoor light feels dimmer in December than in June. Set your latitude and jeha lifts circadian brightness as the days get shorter:
+Winter is darker than summer, so the same indoor light feels dimmer in December than in June. jeha lifts circadian brightness as the days get shorter at your location. It's on by default and needs no configuration.
+
+On first start, jeha looks up its approximate location from its public IP via `https://geoip.vpetersson.com/`. It then writes the latitude, rounded to city level, into `[general]` in the config file, so the lookup only happens once:
 
 ```toml
 [general]
-latitude = 59.33              # Decimal degrees, negative for the southern hemisphere
+latitude = 59.33  # Set automatically from GeoIP — edit if wrong
 ```
 
-jeha works out today's daylight hours at that latitude. With 16 hours or more it uses the regular circadian brightness. With 8 hours or less it uses the winter values. In between it blends the two. In Stockholm that means summer brightness in June, full winter brightness from November to January, and about halfway at the equinoxes. Near the equator (about 12 hours of daylight all year) you get a constant half-way lift. The southern hemisphere works the same way, with the seasons flipped. Without a latitude, nothing changes.
+Edit the value if the guess is off (VPNs and some ISPs geolocate to the wrong city), or set it yourself up front to skip the lookup. Use decimal degrees, negative for the southern hemisphere. If the lookup fails, jeha starts normally with winter mode off and tries again on the next start. If the config file is read-only, the latitude is used for this run only. To turn off the lookup entirely:
+
+```toml
+[general]
+geoip_lookup = false          # No network lookup; winter mode only if latitude is set
+```
+
+jeha works out today's daylight hours at that latitude. With 16 hours or more it uses the regular circadian brightness. With 8 hours or less it uses the winter values. In between it blends the two. In Stockholm that means summer brightness in June, full winter brightness from November to January, and about halfway at the equinoxes. Near the equator (about 12 hours of daylight all year) you get a constant half-way lift. The southern hemisphere works the same way, with the seasons flipped. With no latitude (lookup off or failed), brightness is the same all year.
 
 Only brightness is adjusted. Wake and sleep times stay fixed, because they follow your schedule, not the sun. Winter defaults:
 

@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod config_sync;
 pub mod event;
+pub mod geoip;
 pub mod lights_out;
 pub mod mqtt;
 pub mod night_mode;

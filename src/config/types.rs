@@ -80,8 +80,12 @@ pub struct GeneralConfig {
     pub illuminance_threshold: u16,
     /// Latitude of the home in decimal degrees (-90 to 90, negative = south).
     /// Enables winter mode: circadian brightness is lifted towards
-    /// `circadian.defaults.winter` as the days get shorter. Unset = no seasonal adjustment.
+    /// `circadian.defaults.winter` as the days get shorter. When unset, jeha looks
+    /// it up from GeoIP at startup and writes it here (see `geoip_lookup`).
     pub latitude: Option<f64>,
+    /// Look up `latitude` from the host's public IP when it isn't set. Default: true.
+    #[serde(default = "default_true")]
+    pub geoip_lookup: bool,
 }
 
 fn default_motion_timeout_secs() -> u64 {

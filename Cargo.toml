@@ -23,6 +23,7 @@ anyhow = "1"
 thiserror = "2"
 bytes = "1"
 axum = "0.8"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [profile.release]
 strip = true
