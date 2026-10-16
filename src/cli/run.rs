@@ -19,12 +19,21 @@ use crate::mqtt::publish::Publisher;
 use crate::night_mode::NightModeScheduler;
 use crate::state;
 
+/// `[api]` settings given on the command line or in the environment. Each
+/// one that is set replaces the config file value.
+#[derive(Debug, Default)]
+pub struct ApiOverrides {
+    pub enabled: Option<bool>,
+    pub bind: Option<String>,
+    pub token: Option<String>,
+}
+
 pub async fn run_daemon(
     config_path: &Path,
     mqtt_host: Option<String>,
     mqtt_port: Option<u16>,
     mqtt_topic: Option<String>,
-    api_bind: Option<String>,
+    api: ApiOverrides,
 ) -> Result<()> {
     // 1. Parse + validate config
     let mut loaded_config = config::load_config(config_path)?;
@@ -39,9 +48,16 @@ pub async fn run_daemon(
     if let Some(topic) = mqtt_topic {
         loaded_config.mqtt.base_topic = topic;
     }
-    if let Some(bind) = api_bind {
+    if let Some(enabled) = api.enabled {
+        loaded_config.api.enabled = enabled;
+    }
+    if let Some(bind) = api.bind {
         loaded_config.api.bind = bind;
     }
+    if let Some(token) = api.token {
+        loaded_config.api.token = Some(token);
+    }
+    config::validate::validate_api(&loaded_config.api)?;
 
     if loaded_config.general.latitude.is_none() && loaded_config.general.geoip_lookup {
         resolve_latitude(&mut loaded_config, config_path).await;
@@ -192,28 +208,32 @@ pub async fn run_daemon(
     tokio::spawn(night_scheduler.run());
 
     // 7. Start API server
-    let api_state = shared_state.clone();
-    let api_state_tx = state_tx.clone();
-    let api_publisher = publisher.clone();
-    let api_bind_addr = app_config.api.bind.clone();
-    let api_config = app_config.clone();
-    let api_event_bus = event_bus.clone();
-    let api_circadian = Some(circadian_for_automations);
-    tokio::spawn(async move {
-        if let Err(e) = api::start_api_server(
-            &api_bind_addr,
-            api_state,
-            api_state_tx,
-            api_publisher,
-            api_config,
-            api_event_bus,
-            api_circadian,
-        )
-        .await
-        {
-            tracing::error!("API server error: {}", e);
-        }
-    });
+    if app_config.api.enabled {
+        let api_state = shared_state.clone();
+        let api_state_tx = state_tx.clone();
+        let api_publisher = publisher.clone();
+        let api_settings = app_config.api.clone();
+        let api_config = app_config.clone();
+        let api_event_bus = event_bus.clone();
+        let api_circadian = Some(circadian_for_automations);
+        tokio::spawn(async move {
+            if let Err(e) = api::start_api_server(
+                &api_settings,
+                api_state,
+                api_state_tx,
+                api_publisher,
+                api_config,
+                api_event_bus,
+                api_circadian,
+            )
+            .await
+            {
+                tracing::error!("API server error: {}", e);
+            }
+        });
+    } else {
+        info!("API server disabled (api.enabled = false)");
+    }
 
     // 8. Log ready
     info!("jeha started");

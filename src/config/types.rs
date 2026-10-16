@@ -184,8 +184,22 @@ pub struct NightModeDefaults {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ApiConfig {
+    /// Run the REST API server. Set to false to turn the API off entirely.
+    /// Default: true.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Address and port the API listens on. Default: "127.0.0.1:8420".
     #[serde(default = "default_api_bind")]
     pub bind: String,
+    /// Bearer token required on every request except `/api/health` and the
+    /// docs. Set this before binding to anything other than localhost.
+    /// Default: unset (no authentication).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+    /// Serve the OpenAPI spec at `/api/openapi.json` and Swagger UI at
+    /// `/api/docs`. Default: true.
+    #[serde(default = "default_true")]
+    pub docs: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

@@ -1,0 +1,1559 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "jeha",
+    "description": "REST API for jeha, a light automation daemon for Zigbee2MQTT.\n\nRooms are identified by their key under `[rooms]` in config.toml. Every response that changes something carries a human-readable `description`, so the API works as well for scripts as it does as a tool for an AI assistant.\n\nErrors use HTTP status codes with a `{\"error\": \"...\"}` body.\n\nWhen `api.token` is set, every endpoint except `/api/health`, `/api/openapi.json` and `/api/docs` requires `Authorization: Bearer <token>`.",
+    "license": {
+      "name": "GPL-3.0",
+      "identifier": "GPL-3.0-only"
+    },
+    "version": "26.10.0"
+  },
+  "paths": {
+    "/api/rooms": {
+      "get": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "List all rooms.",
+        "description": "Rooms come back sorted by display name, each with its light state,\noccupancy and circadian status.",
+        "operationId": "list_rooms",
+        "responses": {
+          "200": {
+            "description": "All configured rooms",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}": {
+      "get": {
+        "tags": [
+          "rooms"
+        ],
+        "summary": "Get one room.",
+        "operationId": "get_room",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID (the key under `[rooms]` in config.toml)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Room detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoomDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/light/on": {
+      "post": {
+        "tags": [
+          "lights"
+        ],
+        "summary": "Turn a room's lights on.",
+        "description": "With no brightness or colour temperature the lights come on at the current\ncircadian target. Setting either one is a manual override: circadian stops\nadjusting the room until `override_ttl_mins` runs out or circadian is resumed.",
+        "operationId": "light_on",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional; omit the body (and Content-Type) to use the circadian target",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LightOnRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/light/off": {
+      "post": {
+        "tags": [
+          "lights"
+        ],
+        "summary": "Turn a room's lights off.",
+        "operationId": "light_off",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Optional; the body may be omitted",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LightOffRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/circadian/pause": {
+      "post": {
+        "tags": [
+          "circadian"
+        ],
+        "summary": "Pause circadian for a room.",
+        "description": "jeha stops adjusting the room's lights until circadian is resumed.",
+        "operationId": "pause_circadian",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/circadian/resume": {
+      "post": {
+        "tags": [
+          "circadian"
+        ],
+        "summary": "Resume circadian for a room.",
+        "description": "Clears any pause, snooze or manual override; the lights transition to the\ncircadian target on the next cycle.",
+        "operationId": "resume_circadian",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/circadian/snooze": {
+      "post": {
+        "tags": [
+          "circadian"
+        ],
+        "summary": "Snooze circadian for a room.",
+        "description": "Like pause, but circadian resumes by itself after `hours`.",
+        "operationId": "snooze_circadian",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SnoozeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/scene": {
+      "post": {
+        "tags": [
+          "scenes"
+        ],
+        "summary": "Apply a built-in scene.",
+        "description": "Pauses circadian for the room. See `GET /api/scenes` for the available scenes.",
+        "operationId": "set_scene",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSceneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown scene or invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/z2m-scenes": {
+      "get": {
+        "tags": [
+          "scenes"
+        ],
+        "summary": "List a room's Zigbee2MQTT scenes.",
+        "description": "Scenes are stored in the room's Z2M group; create them in the Z2M frontend.\nA room without a Z2M group returns an empty list.",
+        "operationId": "list_z2m_scenes",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scenes stored in the room's Z2M group",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Z2mSceneList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/z2m-scenes/recall": {
+      "post": {
+        "tags": [
+          "scenes"
+        ],
+        "summary": "Recall a Zigbee2MQTT scene.",
+        "description": "Pauses circadian for the room.",
+        "operationId": "recall_z2m_scene",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallZ2mSceneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Room has no Z2M group, or invalid body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room or scene",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rooms/{room_id}/night-mode": {
+      "post": {
+        "tags": [
+          "night_mode"
+        ],
+        "summary": "Switch night mode on or off.",
+        "description": "Night mode sets the room to its dim, warm night values and pauses\ncircadian; switching it off resumes circadian.",
+        "operationId": "set_night_mode",
+        "parameters": [
+          {
+            "name": "room_id",
+            "in": "path",
+            "description": "Room ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetNightModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Done",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown room",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Publishing to Zigbee2MQTT failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scenes": {
+      "get": {
+        "tags": [
+          "scenes"
+        ],
+        "summary": "List the built-in scenes.",
+        "description": "These can be applied to any room with `POST /api/rooms/{room_id}/scene`.",
+        "operationId": "list_scenes",
+        "responses": {
+          "200": {
+            "description": "Built-in scenes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SceneInfo"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/circadian": {
+      "get": {
+        "tags": [
+          "circadian"
+        ],
+        "summary": "Circadian status of every room.",
+        "operationId": "get_circadian_status",
+        "responses": {
+          "200": {
+            "description": "Circadian status per room, sorted by display name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RoomCircadian"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/system": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "System status.",
+        "description": "MQTT and Zigbee2MQTT connectivity, uptime and device counts.",
+        "operationId": "get_system_status",
+        "responses": {
+          "200": {
+            "description": "System status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Health check.",
+        "description": "Always answers 200 while the daemon is running, and never requires a\ntoken, so it can back a container health check.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "description": "jeha is running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ActionResponse": {
+        "type": "object",
+        "description": "Result of a state-changing room action. Fields beyond `status`, `room` and\n`description` are only present for the actions they belong to.",
+        "required": [
+          "status",
+          "room",
+          "description"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "room": {
+            "type": "string",
+            "example": "kitchen"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable summary of what happened."
+          },
+          "circadian": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "New circadian state (`pause`, `resume`, `snooze`).",
+            "example": "paused"
+          },
+          "duration": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Snooze duration, formatted like `1h 30m` (`snooze`)."
+          },
+          "scene": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Scene applied (`scene`)."
+          },
+          "brightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Brightness applied (`scene`).",
+            "minimum": 0
+          },
+          "color_temp_k": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Colour temperature applied (`scene`).",
+            "minimum": 0
+          },
+          "z2m_scene": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the recalled Z2M scene (`z2m-scenes/recall`)."
+          },
+          "scene_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "ID of the recalled Z2M scene (`z2m-scenes/recall`).",
+            "minimum": 0
+          },
+          "night_mode": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "New night mode state (`night-mode`)."
+          }
+        }
+      },
+      "CircadianState": {
+        "type": "string",
+        "description": "- `active`: lights follow the circadian curve\n- `manual_override`: brightness or colour was set by hand; see `remaining_mins`\n- `snoozed`: paused for a fixed time; see `remaining_secs`\n- `paused`: paused until resumed\n- `disabled`: `circadian_enabled = false` for the room",
+        "enum": [
+          "active",
+          "manual_override",
+          "snoozed",
+          "paused",
+          "disabled"
+        ]
+      },
+      "CircadianStatus": {
+        "type": "object",
+        "description": "Whether jeha is currently steering a room's lights, and for how long not.",
+        "required": [
+          "status",
+          "description"
+        ],
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/CircadianState"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable summary, suitable for showing to a user or an LLM."
+          },
+          "remaining_mins": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Minutes until a manual override expires (`manual_override` only).",
+            "minimum": 0
+          },
+          "remaining": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Snooze time left, formatted like `1h 20m` (`snoozed` only)."
+          },
+          "remaining_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Snooze time left in seconds (`snoozed` only).",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "Error body returned with every 4xx/5xx response.",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Room 'attic' not found. Available rooms: kitchen, office"
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "version"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          },
+          "version": {
+            "type": "string",
+            "description": "jeha version.",
+            "example": "26.10.0"
+          }
+        }
+      },
+      "LightOffRequest": {
+        "type": "object",
+        "description": "Turn a room's lights off. The body is optional.",
+        "properties": {
+          "transition": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Transition time in seconds.",
+            "example": 2,
+            "minimum": 0
+          }
+        }
+      },
+      "LightOnRequest": {
+        "type": "object",
+        "description": "Turn a room's lights on. All fields are optional: an empty body turns the\nlights on at the current circadian target.",
+        "properties": {
+          "brightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Brightness, 1-254. Setting this (or `color_temp_k`) is a manual override.",
+            "example": 200,
+            "maximum": 254,
+            "minimum": 1
+          },
+          "color_temp_k": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Colour temperature in Kelvin. Setting this (or `brightness`) is a manual override.",
+            "example": 2700,
+            "maximum": 10000,
+            "minimum": 1000
+          },
+          "transition": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Transition time in seconds.",
+            "example": 2,
+            "minimum": 0
+          },
+          "override_ttl_mins": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Minutes until a manual override expires and circadian takes over again.\nWithout it, the override lasts until circadian is resumed.",
+            "example": 60.0,
+            "maximum": 10080,
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "RecallZ2mSceneRequest": {
+        "type": "object",
+        "description": "Recall a scene stored in the room's Zigbee2MQTT group.",
+        "required": [
+          "scene_id"
+        ],
+        "properties": {
+          "scene_id": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Z2M scene ID (see `GET /api/rooms/{room_id}/z2m-scenes`).",
+            "example": 1,
+            "minimum": 0
+          },
+          "override_ttl_mins": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Minutes until circadian takes over again.",
+            "maximum": 10080,
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "RoomCircadian": {
+        "type": "object",
+        "description": "Circadian state of one room, as listed by `GET /api/circadian`.",
+        "required": [
+          "room_id",
+          "display_name",
+          "lights_on",
+          "circadian"
+        ],
+        "properties": {
+          "room_id": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "lights_on": {
+            "type": "boolean"
+          },
+          "brightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "color_temp_mired": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "circadian": {
+            "$ref": "#/components/schemas/CircadianStatus"
+          }
+        }
+      },
+      "RoomDetail": {
+        "type": "object",
+        "description": "Full detail for one room.",
+        "required": [
+          "room_id",
+          "display_name",
+          "lights_on",
+          "occupancy",
+          "has_motion_sensor",
+          "remotes",
+          "night_mode",
+          "circadian_enabled",
+          "circadian"
+        ],
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "example": "kitchen"
+          },
+          "display_name": {
+            "type": "string",
+            "example": "Kitchen"
+          },
+          "z2m_group": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lights_on": {
+            "type": "boolean"
+          },
+          "brightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "color_temp_mired": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "occupancy": {
+            "type": "boolean"
+          },
+          "has_motion_sensor": {
+            "type": "boolean"
+          },
+          "motion_timeout_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seconds without motion before the lights turn off. Null without a motion sensor.",
+            "minimum": 0
+          },
+          "remotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "IEEE addresses of the remotes bound to this room."
+          },
+          "night_mode": {
+            "type": "boolean"
+          },
+          "circadian_enabled": {
+            "type": "boolean"
+          },
+          "circadian": {
+            "$ref": "#/components/schemas/CircadianStatus"
+          }
+        }
+      },
+      "RoomSummary": {
+        "type": "object",
+        "description": "A room as listed by `GET /api/rooms`.",
+        "required": [
+          "room_id",
+          "display_name",
+          "lights_on",
+          "occupancy",
+          "night_mode",
+          "circadian"
+        ],
+        "properties": {
+          "room_id": {
+            "type": "string",
+            "example": "kitchen"
+          },
+          "display_name": {
+            "type": "string",
+            "example": "Kitchen"
+          },
+          "lights_on": {
+            "type": "boolean"
+          },
+          "brightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Last known brightness, 0-254.",
+            "minimum": 0
+          },
+          "color_temp_mired": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Last known colour temperature in mired.",
+            "minimum": 0
+          },
+          "occupancy": {
+            "type": "boolean"
+          },
+          "night_mode": {
+            "type": "boolean"
+          },
+          "circadian": {
+            "$ref": "#/components/schemas/CircadianStatus"
+          }
+        }
+      },
+      "SceneInfo": {
+        "type": "object",
+        "description": "A built-in jeha scene.",
+        "required": [
+          "name",
+          "brightness",
+          "color_temp_k",
+          "description"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "relax"
+          },
+          "brightness": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "color_temp_k": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "description": {
+            "type": "string",
+            "example": "Relaxed — dimmer, warm white"
+          }
+        }
+      },
+      "SetNightModeRequest": {
+        "type": "object",
+        "description": "Switch night mode on or off.",
+        "required": [
+          "active"
+        ],
+        "properties": {
+          "active": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SetSceneRequest": {
+        "type": "object",
+        "description": "Apply one of jeha's built-in scenes (see `GET /api/scenes`).",
+        "required": [
+          "scene"
+        ],
+        "properties": {
+          "scene": {
+            "type": "string",
+            "description": "Scene name.",
+            "example": "relax"
+          },
+          "override_ttl_mins": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Minutes until circadian takes over again. Without it, the scene stays\nuntil circadian is resumed.",
+            "maximum": 10080,
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "SnoozeRequest": {
+        "type": "object",
+        "description": "Pause circadian adjustments for a fixed time.",
+        "required": [
+          "hours"
+        ],
+        "properties": {
+          "hours": {
+            "type": "number",
+            "format": "double",
+            "description": "Hours to snooze for, greater than 0 and at most 24.",
+            "example": 2.0,
+            "maximum": 24,
+            "exclusiveMinimum": 0
+          }
+        }
+      },
+      "SystemStatus": {
+        "type": "object",
+        "required": [
+          "mqtt_connected",
+          "z2m_online",
+          "uptime",
+          "uptime_secs",
+          "device_count",
+          "group_count",
+          "room_count",
+          "version"
+        ],
+        "properties": {
+          "mqtt_connected": {
+            "type": "boolean"
+          },
+          "z2m_online": {
+            "type": "boolean",
+            "description": "Whether the Zigbee2MQTT bridge reports itself online."
+          },
+          "uptime": {
+            "type": "string",
+            "example": "3h 12m"
+          },
+          "uptime_secs": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "device_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "group_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "room_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "version": {
+            "type": "string",
+            "example": "26.10.0"
+          }
+        }
+      },
+      "Z2mScene": {
+        "type": "object",
+        "description": "A scene stored in a Zigbee2MQTT group.",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "Z2mSceneList": {
+        "type": "object",
+        "required": [
+          "room",
+          "scenes",
+          "description"
+        ],
+        "properties": {
+          "room": {
+            "type": "string"
+          },
+          "z2m_group": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The room's Z2M group. Absent when the room has none."
+          },
+          "scenes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Z2mScene"
+            }
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The value of `api.token` in config.toml"
+      }
+    }
+  },
+  "security": [
+    {
+      "bearer": []
+    },
+    {}
+  ],
+  "tags": [
+    {
+      "name": "rooms",
+      "description": "Room state"
+    },
+    {
+      "name": "lights",
+      "description": "Turn lights on and off"
+    },
+    {
+      "name": "circadian",
+      "description": "Pause, snooze and resume circadian lighting"
+    },
+    {
+      "name": "scenes",
+      "description": "Built-in scenes and Zigbee2MQTT group scenes"
+    },
+    {
+      "name": "night_mode",
+      "description": "Night mode"
+    },
+    {
+      "name": "system",
+      "description": "Daemon status"
+    }
+  ]
+}

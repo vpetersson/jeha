@@ -91,7 +91,10 @@ impl Default for LightsOutConfig {
 impl Default for ApiConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             bind: "127.0.0.1:8420".to_string(),
+            token: None,
+            docs: true,
         }
     }
 }

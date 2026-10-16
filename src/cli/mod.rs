@@ -35,6 +35,12 @@ pub enum Commands {
         /// API server bind address (overrides config file)
         #[arg(long, alias = "mcp-bind", env = "JEHA_API_BIND")]
         api_bind: Option<String>,
+        /// Enable or disable the REST API (overrides config file)
+        #[arg(long, env = "JEHA_API_ENABLED", value_name = "BOOL")]
+        api_enabled: Option<bool>,
+        /// Bearer token required by the REST API (overrides config file)
+        #[arg(long, env = "JEHA_API_TOKEN", hide_env_values = true)]
+        api_token: Option<String>,
     },
     /// Validate configuration
     Validate {
@@ -53,6 +59,8 @@ pub enum Commands {
     },
     /// Export JSON Schema for editor integration
     Schema,
+    /// Export the REST API's OpenAPI document (JSON)
+    Openapi,
     /// Connect to Z2M, discover groups/devices, generate config.toml
     Init {
         /// MQTT broker host

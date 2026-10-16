@@ -23,8 +23,15 @@ async fn main() -> Result<()> {
             mqtt_port,
             mqtt_topic,
             api_bind,
+            api_enabled,
+            api_token,
         } => {
-            jeha::cli::run::run_daemon(&config, mqtt_host, mqtt_port, mqtt_topic, api_bind).await?;
+            let api = jeha::cli::run::ApiOverrides {
+                enabled: api_enabled,
+                bind: api_bind,
+                token: api_token,
+            };
+            jeha::cli::run::run_daemon(&config, mqtt_host, mqtt_port, mqtt_topic, api).await?;
         }
         Commands::Validate {
             config: config_path,
@@ -41,6 +48,9 @@ async fn main() -> Result<()> {
         Commands::Schema => {
             let schema = schemars::schema_for!(config::types::AppConfig);
             println!("{}", serde_json::to_string_pretty(&schema)?);
+        }
+        Commands::Openapi => {
+            println!("{}", jeha::api::openapi::openapi_json());
         }
         Commands::Init {
             mqtt_host,

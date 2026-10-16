@@ -19,7 +19,7 @@ cargo clippy --all-targets -- -D warnings  # Lint (CI treats warnings as errors)
 
 Rust toolchain is at `~/.cargo/bin` (may not be in default PATH).
 
-CLI subcommands: `run`, `validate`, `migrate`, `schema`, `init`.
+CLI subcommands: `run`, `validate`, `migrate`, `schema`, `openapi`, `init`.
 
 ## Versioning
 
@@ -58,7 +58,10 @@ All engines run as independent `tokio::spawn` tasks. Failures in one engine don'
 - `src/event.rs` — `Event` enum and `EventBus`
 - `src/mqtt/z2m.rs` — Z2M message handlers (devices, groups, state, availability)
 - `src/mqtt/publish.rs` — `Publisher` for sending commands to Z2M
-- `src/api/handlers.rs` — REST API handler functions and shared AppState
+- `src/api/mod.rs` — API router, bearer-token middleware, docs routes
+- `src/api/handlers.rs` — REST API handler functions (with `#[utoipa::path]` docs) and shared AppState
+- `src/api/types.rs` — request/response bodies (`ToSchema`); handlers return these, not ad-hoc `json!`
+- `src/api/openapi.rs` — OpenAPI document; `docs/api/openapi.json` is the checked-in copy. After any API change run `cargo run -- openapi > docs/api/openapi.json` (a test fails otherwise)
 - `src/schedule.rs` — `TimeOfDay`, `Schedule`, time matching logic
 
 ## Testing

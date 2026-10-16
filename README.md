@@ -279,15 +279,31 @@ z2m_group = "Porch"
 lights_out = false
 ```
 
+### API
+
+The REST API is on by default and listens on localhost only. All settings are optional:
+
+```toml
+[api]
+enabled = true              # false turns the API server off entirely
+bind = "127.0.0.1:8420"     # use 0.0.0.0:8420 to reach it from other machines
+token = "change-me"         # require "Authorization: Bearer change-me" (default: no auth)
+docs = true                 # serve /api/openapi.json and Swagger UI at /api/docs
+```
+
+Set `token` before binding to anything other than localhost; jeha logs a warning if you don't. `/api/health` and the docs never need the token.
+
 ## CLI
 
 ```
 jeha run [--config path]              # Start daemon
 jeha run --mqtt-host 10.0.0.5        # Override MQTT host
 jeha run --api-bind 0.0.0.0:8420     # Override API bind address
+jeha run --api-enabled false          # Run without the REST API
 jeha validate [--config path]         # Validate config
 jeha validate --check-devices         # Also verify against live Z2M
 jeha schema                           # Export JSON Schema
+jeha openapi                          # Export the REST API's OpenAPI document
 jeha init                             # Auto-generate config from Z2M
 jeha init --mqtt-host 10.0.0.5       # Custom MQTT host
 jeha init --output config.toml        # Write directly to file
@@ -303,12 +319,19 @@ jeha migrate --dry-run                # Preview migration without writing
 | `JEHA_MQTT_PORT` | MQTT broker port |
 | `JEHA_MQTT_TOPIC` | Z2M base topic (default: `zigbee2mqtt`) |
 | `JEHA_API_BIND` | API server bind address (default: `127.0.0.1:8420`) |
+| `JEHA_API_ENABLED` | `true`/`false` to turn the REST API on or off (default: `true`) |
+| `JEHA_API_TOKEN` | Bearer token required by the REST API (default: none) |
 
 CLI arguments take precedence over env vars, which take precedence over config file values.
 
 ## REST API
 
-jeha exposes a REST API on port 8420:
+jeha exposes a REST API on port 8420. The full reference is an OpenAPI 3.1 document:
+
+- **Swagger UI:** `http://localhost:8420/api/docs` on a running jeha (the UI's assets load from the jsDelivr CDN)
+- **Spec:** `http://localhost:8420/api/openapi.json`, `jeha openapi`, or [`docs/api/openapi.json`](docs/api/openapi.json) in this repo
+
+The spec is generated from the handler code, and a test fails if the checked-in copy falls behind. After changing the API, regenerate it with `cargo run -- openapi > docs/api/openapi.json`.
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -316,17 +339,28 @@ jeha exposes a REST API on port 8420:
 | `/api/rooms/{room_id}` | GET | Detailed state for one room |
 | `/api/rooms/{room_id}/light/on` | POST | Turn on with optional brightness/color_temp/override TTL |
 | `/api/rooms/{room_id}/light/off` | POST | Turn off |
-| `/api/rooms/{room_id}/scene` | POST | Predefined scenes: bright, relax, movie, energize, nightlight |
+| `/api/rooms/{room_id}/scene` | POST | Apply a built-in scene |
 | `/api/rooms/{room_id}/z2m-scenes` | GET | List Z2M scenes available for a room |
 | `/api/rooms/{room_id}/z2m-scenes/recall` | POST | Activate a Z2M scene (pauses circadian) |
 | `/api/rooms/{room_id}/circadian/pause` | POST | Stop circadian adjustments indefinitely |
 | `/api/rooms/{room_id}/circadian/resume` | POST | Resume circadian |
 | `/api/rooms/{room_id}/circadian/snooze` | POST | Pause circadian for N hours, auto-resume |
 | `/api/rooms/{room_id}/night-mode` | POST | Toggle night mode |
-| `/api/circadian` | GET | Current targets for all rooms |
-| `/api/system` | GET | MQTT/Z2M connection, uptime, device counts |
+| `/api/scenes` | GET | Built-in scenes: bright, relax, movie, energize, nightlight |
+| `/api/circadian` | GET | Circadian status for all rooms |
+| `/api/system` | GET | MQTT/Z2M connection, uptime, device counts, version |
+| `/api/health` | GET | Liveness check (no token needed) |
 
-Errors use HTTP status codes (400, 404, 500) with `{"error": "message"}` body.
+The bodies of `light/on` and `light/off` are optional:
+
+```bash
+curl -X POST localhost:8420/api/rooms/kitchen/light/on
+curl -X POST localhost:8420/api/rooms/kitchen/light/on \
+  -H 'Content-Type: application/json' -d '{"brightness": 120, "override_ttl_mins": 60}'
+curl -H 'Authorization: Bearer change-me' localhost:8420/api/rooms   # with api.token set
+```
+
+Errors use HTTP status codes (400, 401, 404, 500) with an `{"error": "message"}` body.
 
 ## Circadian curve
 

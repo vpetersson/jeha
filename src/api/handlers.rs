@@ -2,11 +2,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, OptionalFromRequest, Path, Request, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde::de::DeserializeOwned;
 use tokio::sync::mpsc;
 
 use crate::circadian::CircadianEngine;
@@ -14,6 +14,10 @@ use crate::config::types::AppConfig;
 use crate::event::EventBus;
 use crate::mqtt::publish::Publisher;
 use crate::state::{RoomStateUpdate, SharedState, StateCommand, UpdateSource};
+
+use super::types::*;
+
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // --- Shared state ---
 
@@ -49,8 +53,10 @@ impl AppState {
 
 // --- Error type ---
 
+#[derive(Debug)]
 pub enum ApiError {
     BadRequest(String),
+    Unauthorized(String),
     NotFound(String),
     Internal(String),
 }
@@ -59,10 +65,51 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+            ApiError::Unauthorized(msg) => (StatusCode::UNAUTHORIZED, msg),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
-        (status, Json(json!({"error": message}))).into_response()
+        (status, Json(ErrorResponse { error: message })).into_response()
+    }
+}
+
+impl From<JsonRejection> for ApiError {
+    fn from(rejection: JsonRejection) -> Self {
+        ApiError::BadRequest(rejection.body_text())
+    }
+}
+
+// --- JSON body extractor ---
+
+/// `axum::Json`, but malformed bodies are reported as the API's usual
+/// `{"error": ...}` JSON instead of a plain-text rejection.
+pub struct ApiJson<T>(pub T);
+
+impl<T, S> FromRequest<S> for ApiJson<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(value) = <Json<T> as FromRequest<S>>::from_request(req, state).await?;
+        Ok(ApiJson(value))
+    }
+}
+
+/// Lets a handler take `Option<ApiJson<T>>` for an optional body: a request
+/// with no `Content-Type` yields `None`, anything else must be valid JSON.
+impl<T, S> OptionalFromRequest<S> for ApiJson<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = ApiError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Option<Self>, Self::Rejection> {
+        let value = <Json<T> as OptionalFromRequest<S>>::from_request(req, state).await?;
+        Ok(value.map(|Json(v)| ApiJson(v)))
     }
 }
 
@@ -71,7 +118,8 @@ impl AppState {
         if self.config.rooms.contains_key(room_id) {
             Ok(())
         } else {
-            let available: Vec<&str> = self.config.rooms.keys().map(|s| s.as_str()).collect();
+            let mut available: Vec<&str> = self.config.rooms.keys().map(|s| s.as_str()).collect();
+            available.sort_unstable();
             Err(ApiError::NotFound(format!(
                 "Room '{}' not found. Available rooms: {}",
                 room_id,
@@ -109,42 +157,47 @@ impl AppState {
         Vec::new()
     }
 
-    fn describe_circadian_status(&self, rs: &crate::state::RoomState) -> Value {
+    fn describe_circadian_status(&self, rs: &crate::state::RoomState) -> CircadianStatus {
         if rs.update_source == UpdateSource::Manual {
             if let Some(until) = rs.manual_override_until {
                 let now = Instant::now();
                 if now < until {
                     let remaining = until - now;
                     let mins = remaining.as_secs() / 60;
-                    return json!({
-                        "status": "manual_override",
-                        "remaining_mins": mins,
-                        "description": format!("Manual override active — circadian auto-resumes in {}m", mins)
-                    });
+                    return CircadianStatus {
+                        remaining_mins: Some(mins),
+                        ..CircadianStatus::new(
+                            CircadianState::ManualOverride,
+                            format!(
+                                "Manual override active — circadian auto-resumes in {}m",
+                                mins
+                            ),
+                        )
+                    };
                 }
             } else if !rs.circadian_paused {
-                return json!({
-                    "status": "manual_override",
-                    "description": "Manual override active indefinitely — use resume_circadian to re-enable"
-                });
+                return CircadianStatus::new(
+                    CircadianState::ManualOverride,
+                    "Manual override active indefinitely — use resume_circadian to re-enable",
+                );
             }
         }
 
         if !rs.circadian_paused {
-            return json!({
-                "status": "active",
-                "description": "Circadian rhythm is active — lights adjust automatically"
-            });
+            return CircadianStatus::new(
+                CircadianState::Active,
+                "Circadian rhythm is active — lights adjust automatically",
+            );
         }
 
         match rs.circadian_paused_until {
             Some(until) => {
                 let now = Instant::now();
                 if now >= until {
-                    json!({
-                        "status": "active",
-                        "description": "Circadian snooze has expired — will resume on next cycle"
-                    })
+                    CircadianStatus::new(
+                        CircadianState::Active,
+                        "Circadian snooze has expired — will resume on next cycle",
+                    )
                 } else {
                     let remaining = until - now;
                     let mins = remaining.as_secs() / 60;
@@ -155,146 +208,193 @@ impl AppState {
                     } else {
                         format!("{}m", remaining_mins)
                     };
-                    json!({
-                        "status": "snoozed",
-                        "remaining": time_str,
-                        "remaining_secs": remaining.as_secs(),
-                        "description": format!("Circadian snoozed — auto-resumes in {}", time_str)
-                    })
+                    CircadianStatus {
+                        remaining_secs: Some(remaining.as_secs()),
+                        description: format!("Circadian snoozed — auto-resumes in {}", time_str),
+                        remaining: Some(time_str),
+                        ..CircadianStatus::new(CircadianState::Snoozed, "")
+                    }
                 }
             }
-            None => {
-                json!({
-                    "status": "paused",
-                    "description": "Circadian paused indefinitely — use resume_circadian to re-enable"
-                })
-            }
+            None => CircadianStatus::new(
+                CircadianState::Paused,
+                "Circadian paused indefinitely — use resume_circadian to re-enable",
+            ),
         }
     }
 }
 
-// --- Request types ---
+// --- Input validation ---
 
-#[derive(Deserialize)]
-pub struct LightOnRequest {
-    pub brightness: Option<u8>,
-    pub color_temp_k: Option<u16>,
-    pub transition: Option<u32>,
-    pub override_ttl_mins: Option<f64>,
+/// Longest manual override the API accepts: one week.
+const MAX_OVERRIDE_TTL_MINS: f64 = 7.0 * 24.0 * 60.0;
+
+fn validate_override_ttl(ttl: Option<f64>) -> Result<(), ApiError> {
+    match ttl {
+        Some(m) if !(m > 0.0 && m <= MAX_OVERRIDE_TTL_MINS) => Err(ApiError::BadRequest(format!(
+            "override_ttl_mins must be greater than 0 and at most {}",
+            MAX_OVERRIDE_TTL_MINS
+        ))),
+        _ => Ok(()),
+    }
 }
 
-#[derive(Deserialize)]
-pub struct LightOffRequest {
-    pub transition: Option<u32>,
+fn validate_light_on(body: &LightOnRequest) -> Result<(), ApiError> {
+    if let Some(b) = body.brightness
+        && !(1..=254).contains(&b)
+    {
+        return Err(ApiError::BadRequest(
+            "brightness must be between 1 and 254".to_string(),
+        ));
+    }
+    if let Some(k) = body.color_temp_k
+        && !(1000..=10000).contains(&k)
+    {
+        return Err(ApiError::BadRequest(
+            "color_temp_k must be between 1000 and 10000".to_string(),
+        ));
+    }
+    validate_override_ttl(body.override_ttl_mins)
 }
 
-#[derive(Deserialize)]
-pub struct SnoozeRequest {
-    pub hours: f64,
-}
+// --- Built-in scenes ---
 
-#[derive(Deserialize)]
-pub struct SetSceneRequest {
-    pub scene: String,
-    pub override_ttl_mins: Option<f64>,
-}
-
-#[derive(Deserialize)]
-pub struct RecallZ2mSceneRequest {
-    pub scene_id: u16,
-    pub override_ttl_mins: Option<f64>,
-}
-
-#[derive(Deserialize)]
-pub struct SetNightModeRequest {
-    pub active: bool,
-}
+/// (name, brightness, color_temp_k, description)
+pub const SCENES: &[(&str, u8, u16, &str)] = &[
+    ("bright", 254, 4000, "Full brightness, neutral white"),
+    ("relax", 150, 2700, "Relaxed — dimmer, warm white"),
+    ("movie", 30, 2200, "Movie mode — very dim, warm amber"),
+    (
+        "energize",
+        254,
+        5500,
+        "Energize — full brightness, cool daylight",
+    ),
+    (
+        "nightlight",
+        10,
+        2200,
+        "Nightlight — barely there, warm amber",
+    ),
+];
 
 // --- Handlers ---
 
-pub async fn get_rooms(State(app): State<Arc<AppState>>) -> Json<Value> {
+/// List all rooms.
+///
+/// Rooms come back sorted by display name, each with its light state,
+/// occupancy and circadian status.
+#[utoipa::path(
+    get,
+    path = "/api/rooms",
+    tag = "rooms",
+    operation_id = "list_rooms",
+    responses(
+        (status = 200, description = "All configured rooms", body = Vec<RoomSummary>),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn get_rooms(State(app): State<Arc<AppState>>) -> Json<Vec<RoomSummary>> {
     let current = app.state.load();
-    let mut rooms: Vec<Value> = current
+    let mut rooms: Vec<RoomSummary> = current
         .rooms
         .iter()
-        .map(|(room_id, rs)| {
-            let display_name = app
-                .config
-                .rooms
-                .get(room_id)
-                .and_then(|r| r.display_name.as_deref())
-                .unwrap_or(room_id);
-            let circadian_status = app.describe_circadian_status(rs);
-            json!({
-                "room_id": room_id,
-                "display_name": display_name,
-                "lights_on": rs.lights_on,
-                "brightness": rs.current_brightness,
-                "color_temp_mired": rs.current_color_temp_mired,
-                "occupancy": rs.occupancy,
-                "night_mode": rs.night_mode_active,
-                "circadian": circadian_status,
-            })
+        .map(|(room_id, rs)| RoomSummary {
+            room_id: room_id.clone(),
+            display_name: app.display_name(room_id),
+            lights_on: rs.lights_on,
+            brightness: rs.current_brightness,
+            color_temp_mired: rs.current_color_temp_mired,
+            occupancy: rs.occupancy,
+            night_mode: rs.night_mode_active,
+            circadian: app.describe_circadian_status(rs),
         })
         .collect();
-    rooms.sort_by(|a, b| a["display_name"].as_str().cmp(&b["display_name"].as_str()));
-    Json(json!(rooms))
+    rooms.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    Json(rooms)
 }
 
+/// Get one room.
+#[utoipa::path(
+    get,
+    path = "/api/rooms/{room_id}",
+    tag = "rooms",
+    params(("room_id" = String, Path, description = "Room ID (the key under `[rooms]` in config.toml)")),
+    responses(
+        (status = 200, description = "Room detail", body = RoomDetail),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+    )
+)]
 pub async fn get_room(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<RoomDetail>, ApiError> {
     let current = app.state.load();
-    match current.rooms.get(&room_id) {
-        Some(rs) => {
-            let room_config = app.config.rooms.get(&room_id);
-            let display_name = room_config
-                .and_then(|r| r.display_name.as_deref())
-                .unwrap_or(&room_id);
-            let z2m_group = room_config.and_then(|r| r.z2m_group.as_deref());
-            let has_motion = room_config
-                .map(|r| r.motion_sensor.is_some())
-                .unwrap_or(false);
-            let remotes = room_config.map(|r| r.remotes.clone()).unwrap_or_default();
-            let motion_timeout_secs = room_config
-                .and_then(|r| r.effective_motion_timeout(app.config.general.motion_timeout_secs));
-            let circadian_enabled = room_config.map(|r| r.circadian_enabled).unwrap_or(true);
-            let circadian_status = if circadian_enabled {
-                app.describe_circadian_status(rs)
-            } else {
-                json!({"status": "disabled", "description": "Circadian is disabled for this room in config"})
-            };
-
-            Ok(Json(json!({
-                "room_id": room_id,
-                "display_name": display_name,
-                "z2m_group": z2m_group,
-                "lights_on": rs.lights_on,
-                "brightness": rs.current_brightness,
-                "color_temp_mired": rs.current_color_temp_mired,
-                "occupancy": rs.occupancy,
-                "has_motion_sensor": has_motion,
-                "motion_timeout_secs": motion_timeout_secs,
-                "remotes": remotes,
-                "night_mode": rs.night_mode_active,
-                "circadian_enabled": circadian_enabled,
-                "circadian": circadian_status,
-            })))
-        }
-        None => Err(ApiError::NotFound(format!(
+    let Some(rs) = current.rooms.get(&room_id) else {
+        return Err(ApiError::NotFound(format!(
             "Room '{}' not found. Use GET /api/rooms to see available room IDs.",
             room_id
-        ))),
-    }
+        )));
+    };
+    let room_config = app.config.rooms.get(&room_id);
+    let circadian_enabled = room_config.map(|r| r.circadian_enabled).unwrap_or(true);
+    let circadian = if circadian_enabled {
+        app.describe_circadian_status(rs)
+    } else {
+        CircadianStatus::new(
+            CircadianState::Disabled,
+            "Circadian is disabled for this room in config",
+        )
+    };
+
+    Ok(Json(RoomDetail {
+        display_name: app.display_name(&room_id),
+        z2m_group: room_config.and_then(|r| r.z2m_group.clone()),
+        lights_on: rs.lights_on,
+        brightness: rs.current_brightness,
+        color_temp_mired: rs.current_color_temp_mired,
+        occupancy: rs.occupancy,
+        has_motion_sensor: room_config
+            .map(|r| r.motion_sensor.is_some())
+            .unwrap_or(false),
+        motion_timeout_secs: room_config
+            .and_then(|r| r.effective_motion_timeout(app.config.general.motion_timeout_secs)),
+        remotes: room_config.map(|r| r.remotes.clone()).unwrap_or_default(),
+        night_mode: rs.night_mode_active,
+        circadian_enabled,
+        circadian,
+        room_id,
+    }))
 }
 
+/// Turn a room's lights on.
+///
+/// With no brightness or colour temperature the lights come on at the current
+/// circadian target. Setting either one is a manual override: circadian stops
+/// adjusting the room until `override_ttl_mins` runs out or circadian is resumed.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/light/on",
+    tag = "lights",
+    params(("room_id" = String, Path, description = "Room ID")),
+    request_body(content = LightOnRequest, description = "Optional; omit the body (and Content-Type) to use the circadian target"),
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 400, description = "Invalid request body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn light_on(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-    Json(body): Json<LightOnRequest>,
-) -> Result<Json<Value>, ApiError> {
+    body: Option<ApiJson<LightOnRequest>>,
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
+    let body = body.map(|ApiJson(b)| b).unwrap_or_default();
+    validate_light_on(&body)?;
     let ct_mired = body.color_temp_k.map(|k| (1_000_000u32 / k as u32) as u16);
 
     let room_config = app.config.rooms.get(&room_id);
@@ -409,17 +509,31 @@ pub async fn light_on(
         }
     }
 
-    Ok(Json(
-        json!({"status": "ok", "room": room_id, "description": desc}),
-    ))
+    Ok(Json(ActionResponse::ok(&room_id, desc)))
 }
 
+/// Turn a room's lights off.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/light/off",
+    tag = "lights",
+    params(("room_id" = String, Path, description = "Room ID")),
+    request_body(content = LightOffRequest, description = "Optional; the body may be omitted"),
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 400, description = "Invalid request body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn light_off(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-    Json(body): Json<LightOffRequest>,
-) -> Result<Json<Value>, ApiError> {
+    body: Option<ApiJson<LightOffRequest>>,
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
+    let body = body.map(|ApiJson(b)| b).unwrap_or_default();
     let group = app
         .config
         .rooms
@@ -463,15 +577,31 @@ pub async fn light_off(
         .await;
 
     let display_name = app.display_name(&room_id);
-    Ok(Json(
-        json!({"status": "ok", "room": room_id, "description": format!("{} lights turned off", display_name)}),
-    ))
+    Ok(Json(ActionResponse::ok(
+        &room_id,
+        format!("{} lights turned off", display_name),
+    )))
 }
 
+/// Pause circadian for a room.
+///
+/// jeha stops adjusting the room's lights until circadian is resumed.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/circadian/pause",
+    tag = "circadian",
+    params(("room_id" = String, Path, description = "Room ID")),
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn pause_circadian(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
 
     let _ = app
@@ -486,18 +616,38 @@ pub async fn pause_circadian(
         .await;
 
     let display_name = app.display_name(&room_id);
-    Ok(Json(json!({
-        "status": "ok",
-        "room": room_id,
-        "circadian": "paused",
-        "description": format!("Circadian rhythm paused for {}. Lights will stay at their current state — jeha won't adjust them. Use resume_circadian when done.", display_name)
-    })))
+    Ok(Json(ActionResponse {
+        circadian: Some("paused".to_string()),
+        ..ActionResponse::ok(
+            &room_id,
+            format!(
+                "Circadian rhythm paused for {}. Lights will stay at their current state — jeha won't adjust them. Use resume_circadian when done.",
+                display_name
+            ),
+        )
+    }))
 }
 
+/// Resume circadian for a room.
+///
+/// Clears any pause, snooze or manual override; the lights transition to the
+/// circadian target on the next cycle.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/circadian/resume",
+    tag = "circadian",
+    params(("room_id" = String, Path, description = "Room ID")),
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn resume_circadian(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
 
     let _ = app
@@ -524,22 +674,43 @@ pub async fn resume_circadian(
         .await;
 
     let display_name = app.display_name(&room_id);
-    Ok(Json(json!({
-        "status": "ok",
-        "room": room_id,
-        "circadian": "active",
-        "description": format!("Circadian rhythm resumed for {}. Lights will smoothly transition to the appropriate setting for the current time of day.", display_name)
-    })))
+    Ok(Json(ActionResponse {
+        circadian: Some("active".to_string()),
+        ..ActionResponse::ok(
+            &room_id,
+            format!(
+                "Circadian rhythm resumed for {}. Lights will smoothly transition to the appropriate setting for the current time of day.",
+                display_name
+            ),
+        )
+    }))
 }
 
+/// Snooze circadian for a room.
+///
+/// Like pause, but circadian resumes by itself after `hours`.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/circadian/snooze",
+    tag = "circadian",
+    params(("room_id" = String, Path, description = "Room ID")),
+    request_body = SnoozeRequest,
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 400, description = "Invalid request body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn snooze_circadian(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-    Json(body): Json<SnoozeRequest>,
-) -> Result<Json<Value>, ApiError> {
+    ApiJson(body): ApiJson<SnoozeRequest>,
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
 
-    if body.hours <= 0.0 || body.hours > 24.0 {
+    if !(body.hours > 0.0 && body.hours <= 24.0) {
         return Err(ApiError::BadRequest(
             "Hours must be between 0 and 24".to_string(),
         ));
@@ -572,34 +743,51 @@ pub async fn snooze_circadian(
         format!("{}m", (body.hours * 60.0).round() as u32)
     };
 
-    Ok(Json(json!({
-        "status": "ok",
-        "room": room_id,
-        "circadian": "snoozed",
-        "duration": time_str,
-        "description": format!("Circadian rhythm snoozed for {} in {}. Lights stay as-is. Auto-resumes in {}.", display_name, time_str, time_str)
-    })))
+    let description = format!(
+        "Circadian rhythm snoozed for {} in {}. Lights stay as-is. Auto-resumes in {}.",
+        display_name, time_str, time_str
+    );
+    Ok(Json(ActionResponse {
+        circadian: Some("snoozed".to_string()),
+        duration: Some(time_str),
+        ..ActionResponse::ok(&room_id, description)
+    }))
 }
 
+/// Apply a built-in scene.
+///
+/// Pauses circadian for the room. See `GET /api/scenes` for the available scenes.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/scene",
+    tag = "scenes",
+    params(("room_id" = String, Path, description = "Room ID")),
+    request_body = SetSceneRequest,
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 400, description = "Unknown scene or invalid body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn set_scene(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-    Json(body): Json<SetSceneRequest>,
-) -> Result<Json<Value>, ApiError> {
+    ApiJson(body): ApiJson<SetSceneRequest>,
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
+    validate_override_ttl(body.override_ttl_mins)?;
 
-    let (brightness, color_temp_k, description) = match body.scene.as_str() {
-        "bright" => (254u8, 4000u16, "Full brightness, neutral white"),
-        "relax" => (150, 2700, "Relaxed — dimmer, warm white"),
-        "movie" => (30, 2200, "Movie mode — very dim, warm amber"),
-        "energize" => (254, 5500, "Energize — full brightness, cool daylight"),
-        "nightlight" => (10, 2200, "Nightlight — barely there, warm amber"),
-        _ => {
-            return Err(ApiError::BadRequest(format!(
-                "Unknown scene '{}'. Available: bright, relax, movie, energize, nightlight",
-                body.scene
-            )));
-        }
+    let Some(&(_, brightness, color_temp_k, description)) =
+        SCENES.iter().find(|(name, ..)| *name == body.scene)
+    else {
+        let available: Vec<&str> = SCENES.iter().map(|(name, ..)| *name).collect();
+        return Err(ApiError::BadRequest(format!(
+            "Unknown scene '{}'. Available: {}",
+            body.scene,
+            available.join(", ")
+        )));
     };
 
     // Resolve the publish target BEFORE pausing circadian, so a room whose
@@ -736,20 +924,37 @@ pub async fn set_scene(
         Some(m) => format!(" Auto-resumes in {}m.", m.round() as u32),
         None => " Use resume_circadian to go back to automatic.".to_string(),
     };
-    Ok(Json(json!({
-        "status": "ok",
-        "room": room_id,
-        "scene": body.scene,
-        "brightness": brightness,
-        "color_temp_k": color_temp_k,
-        "description": format!("{}: {} — {}. Circadian paused.{}", display_name, body.scene, description, ttl_desc)
-    })))
+    let description = format!(
+        "{}: {} — {}. Circadian paused.{}",
+        display_name, body.scene, description, ttl_desc
+    );
+    Ok(Json(ActionResponse {
+        scene: Some(body.scene),
+        brightness: Some(brightness),
+        color_temp_k: Some(color_temp_k),
+        ..ActionResponse::ok(&room_id, description)
+    }))
 }
 
+/// List a room's Zigbee2MQTT scenes.
+///
+/// Scenes are stored in the room's Z2M group; create them in the Z2M frontend.
+/// A room without a Z2M group returns an empty list.
+#[utoipa::path(
+    get,
+    path = "/api/rooms/{room_id}/z2m-scenes",
+    tag = "scenes",
+    params(("room_id" = String, Path, description = "Room ID")),
+    responses(
+        (status = 200, description = "Scenes stored in the room's Z2M group", body = Z2mSceneList),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+    )
+)]
 pub async fn list_z2m_scenes(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Json<Z2mSceneList>, ApiError> {
     app.validate_room(&room_id)?;
     let group_name = app
         .config
@@ -758,21 +963,25 @@ pub async fn list_z2m_scenes(
         .and_then(|r| r.z2m_group.as_deref());
 
     let Some(group_name) = group_name else {
-        return Ok(Json(json!({
-            "room": room_id,
-            "scenes": [],
-            "description": "This room has no Z2M group — Z2M scenes require a group."
-        })));
+        return Ok(Json(Z2mSceneList {
+            room: room_id,
+            z2m_group: None,
+            scenes: Vec::new(),
+            description: "This room has no Z2M group — Z2M scenes require a group.".to_string(),
+        }));
     };
 
     let current = app.state.load();
-    let scenes: Vec<Value> = current
+    let scenes: Vec<Z2mScene> = current
         .group_map
         .get(group_name)
         .map(|g| {
             g.scenes
                 .iter()
-                .map(|s| json!({"id": s.id, "name": s.name}))
+                .map(|s| Z2mScene {
+                    id: s.id,
+                    name: s.name.clone(),
+                })
                 .collect()
         })
         .unwrap_or_default();
@@ -792,20 +1001,38 @@ pub async fn list_z2m_scenes(
         )
     };
 
-    Ok(Json(json!({
-        "room": room_id,
-        "z2m_group": group_name,
-        "scenes": scenes,
-        "description": desc,
-    })))
+    Ok(Json(Z2mSceneList {
+        room: room_id,
+        z2m_group: Some(group_name.to_string()),
+        scenes,
+        description: desc,
+    }))
 }
 
+/// Recall a Zigbee2MQTT scene.
+///
+/// Pauses circadian for the room.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/z2m-scenes/recall",
+    tag = "scenes",
+    params(("room_id" = String, Path, description = "Room ID")),
+    request_body = RecallZ2mSceneRequest,
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 400, description = "Room has no Z2M group, or invalid body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room or scene", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn recall_z2m_scene(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-    Json(body): Json<RecallZ2mSceneRequest>,
-) -> Result<Json<Value>, ApiError> {
+    ApiJson(body): ApiJson<RecallZ2mSceneRequest>,
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
+    validate_override_ttl(body.override_ttl_mins)?;
     let group_name = app
         .config
         .rooms
@@ -937,20 +1164,42 @@ pub async fn recall_z2m_scene(
         None => " Use resume_circadian to go back to automatic.".to_string(),
     };
 
-    Ok(Json(json!({
-        "status": "ok",
-        "room": room_id,
-        "z2m_scene": scene_label,
-        "scene_id": body.scene_id,
-        "description": format!("{}: recalled Z2M scene '{}'. Circadian paused.{}", display_name, scene_label, ttl_desc),
-    })))
+    Ok(Json(ActionResponse {
+        z2m_scene: Some(scene_label.to_string()),
+        scene_id: Some(body.scene_id),
+        ..ActionResponse::ok(
+            &room_id,
+            format!(
+                "{}: recalled Z2M scene '{}'. Circadian paused.{}",
+                display_name, scene_label, ttl_desc
+            ),
+        )
+    }))
 }
 
+/// Switch night mode on or off.
+///
+/// Night mode sets the room to its dim, warm night values and pauses
+/// circadian; switching it off resumes circadian.
+#[utoipa::path(
+    post,
+    path = "/api/rooms/{room_id}/night-mode",
+    tag = "night_mode",
+    params(("room_id" = String, Path, description = "Room ID")),
+    request_body = SetNightModeRequest,
+    responses(
+        (status = 200, description = "Done", body = ActionResponse),
+        (status = 400, description = "Invalid request body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown room", body = ErrorResponse),
+        (status = 500, description = "Publishing to Zigbee2MQTT failed", body = ErrorResponse),
+    )
+)]
 pub async fn set_night_mode(
     State(app): State<Arc<AppState>>,
     Path(room_id): Path<String>,
-    Json(body): Json<SetNightModeRequest>,
-) -> Result<Json<Value>, ApiError> {
+    ApiJson(body): ApiJson<SetNightModeRequest>,
+) -> Result<Json<ActionResponse>, ApiError> {
     app.validate_room(&room_id)?;
     let room_config = app.config.rooms.get(&room_id).unwrap();
     let display_name = app.display_name(&room_id);
@@ -970,12 +1219,16 @@ pub async fn set_night_mode(
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
         let enm = room_config.effective_night_mode(&app.config.night_mode.defaults);
-        Ok(Json(json!({
-            "status": "ok",
-            "room": room_id,
-            "night_mode": true,
-            "description": format!("{}: night mode on (brightness {}, {}K). Circadian paused.", display_name, enm.brightness, enm.color_temp_k)
-        })))
+        Ok(Json(ActionResponse {
+            night_mode: Some(true),
+            ..ActionResponse::ok(
+                &room_id,
+                format!(
+                    "{}: night mode on (brightness {}, {}K). Circadian paused.",
+                    display_name, enm.brightness, enm.color_temp_k
+                ),
+            )
+        }))
     } else {
         crate::night_mode::deactivate_night_mode(
             &room_id,
@@ -989,53 +1242,116 @@ pub async fn set_night_mode(
         .await
         .map_err(|e| ApiError::Internal(e.to_string()))?;
 
-        Ok(Json(json!({
-            "status": "ok",
-            "room": room_id,
-            "night_mode": false,
-            "description": format!("{}: night mode off. Circadian resumed.", display_name)
-        })))
+        Ok(Json(ActionResponse {
+            night_mode: Some(false),
+            ..ActionResponse::ok(
+                &room_id,
+                format!("{}: night mode off. Circadian resumed.", display_name),
+            )
+        }))
     }
 }
 
-pub async fn get_circadian_status(State(app): State<Arc<AppState>>) -> Json<Value> {
+/// Circadian status of every room.
+#[utoipa::path(
+    get,
+    path = "/api/circadian",
+    tag = "circadian",
+    responses(
+        (status = 200, description = "Circadian status per room, sorted by display name", body = Vec<RoomCircadian>),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn get_circadian_status(State(app): State<Arc<AppState>>) -> Json<Vec<RoomCircadian>> {
     let current = app.state.load();
-    let mut rooms: Vec<Value> = current
+    let mut rooms: Vec<RoomCircadian> = current
         .rooms
         .iter()
-        .map(|(room_id, rs)| {
-            let display_name = app.display_name(room_id);
-            let circadian_status = app.describe_circadian_status(rs);
-            json!({
-                "room_id": room_id,
-                "display_name": display_name,
-                "lights_on": rs.lights_on,
-                "brightness": rs.current_brightness,
-                "color_temp_mired": rs.current_color_temp_mired,
-                "circadian": circadian_status,
-            })
+        .map(|(room_id, rs)| RoomCircadian {
+            room_id: room_id.clone(),
+            display_name: app.display_name(room_id),
+            lights_on: rs.lights_on,
+            brightness: rs.current_brightness,
+            color_temp_mired: rs.current_color_temp_mired,
+            circadian: app.describe_circadian_status(rs),
         })
         .collect();
-    rooms.sort_by(|a, b| a["display_name"].as_str().cmp(&b["display_name"].as_str()));
-    Json(json!(rooms))
+    rooms.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    Json(rooms)
 }
 
-pub async fn get_system_status(State(app): State<Arc<AppState>>) -> Json<Value> {
+/// System status.
+///
+/// MQTT and Zigbee2MQTT connectivity, uptime and device counts.
+#[utoipa::path(
+    get,
+    path = "/api/system",
+    tag = "system",
+    responses(
+        (status = 200, description = "System status", body = SystemStatus),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn get_system_status(State(app): State<Arc<AppState>>) -> Json<SystemStatus> {
     let current = app.state.load();
     let uptime = current
         .started_at
         .map(|s| s.elapsed().as_secs())
         .unwrap_or(0);
-    let uptime_str = format_duration(uptime);
-    Json(json!({
-        "mqtt_connected": current.mqtt_connected,
-        "z2m_online": current.z2m_online,
-        "uptime": uptime_str,
-        "uptime_secs": uptime,
-        "device_count": current.device_map.len(),
-        "group_count": current.group_map.len(),
-        "room_count": current.rooms.len(),
-    }))
+    Json(SystemStatus {
+        mqtt_connected: current.mqtt_connected,
+        z2m_online: current.z2m_online,
+        uptime: format_duration(uptime),
+        uptime_secs: uptime,
+        device_count: current.device_map.len(),
+        group_count: current.group_map.len(),
+        room_count: current.rooms.len(),
+        version: VERSION.to_string(),
+    })
+}
+
+/// Health check.
+///
+/// Always answers 200 while the daemon is running, and never requires a
+/// token, so it can back a container health check.
+#[utoipa::path(
+    get,
+    path = "/api/health",
+    tag = "system",
+    security(()),
+    responses((status = 200, description = "jeha is running", body = HealthResponse))
+)]
+pub async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        version: VERSION.to_string(),
+    })
+}
+
+/// List the built-in scenes.
+///
+/// These can be applied to any room with `POST /api/rooms/{room_id}/scene`.
+#[utoipa::path(
+    get,
+    path = "/api/scenes",
+    tag = "scenes",
+    responses(
+        (status = 200, description = "Built-in scenes", body = Vec<SceneInfo>),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn list_scenes() -> Json<Vec<SceneInfo>> {
+    Json(
+        SCENES
+            .iter()
+            .map(|&(name, brightness, color_temp_k, description)| SceneInfo {
+                name: name.to_string(),
+                brightness,
+                color_temp_k,
+                description: description.to_string(),
+            })
+            .collect(),
+    )
 }
 
 fn format_duration(secs: u64) -> String {

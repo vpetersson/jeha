@@ -24,7 +24,12 @@ thiserror = "2"
 bytes = "1"
 axum = "0.8"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
+utoipa = { version = "6", features = ["preserve_order", "preserve_path_order"] }
 
 [profile.release]
 strip = true
 lto = true
+
+[dev-dependencies]
+http-body-util = "0.1.5"
+tower = { version = "0.5", features = ["util"] }

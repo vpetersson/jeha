@@ -1,9 +1,11 @@
+use std::net::SocketAddr;
+
 use anyhow::{Result, bail};
 use tracing::warn;
 
 use crate::schedule::{self, TimeOfDay};
 
-use super::types::AppConfig;
+use super::types::{ApiConfig, AppConfig};
 
 pub fn validate_config(config: &AppConfig) -> Result<()> {
     if config.schema_version != 1 {
@@ -12,6 +14,8 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
             config.schema_version
         );
     }
+
+    validate_api(&config.api)?;
 
     for (room_id, room) in &config.rooms {
         if room.z2m_group.is_none() && room.lights.is_empty() {
@@ -178,6 +182,31 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// Checks the `[api]` section. Called again after CLI/env overrides are applied.
+pub fn validate_api(api: &ApiConfig) -> Result<()> {
+    if !api.enabled {
+        return Ok(());
+    }
+    let addr: SocketAddr = api.bind.parse().map_err(|_| {
+        anyhow::anyhow!(
+            "Invalid api.bind '{}': expected an IP address and port, e.g. 127.0.0.1:8420.",
+            api.bind
+        )
+    })?;
+    if let Some(ref token) = api.token
+        && token.trim().is_empty()
+    {
+        bail!("api.token is set but empty. Remove it to disable authentication.");
+    }
+    if !addr.ip().is_loopback() && api.token.is_none() {
+        warn!(
+            "API is bound to {} without api.token — anyone on the network can control your lights",
+            addr
+        );
+    }
+    Ok(())
+}
+
 fn validate_ieee(addr: &str, field: &str) -> Result<()> {
     if !addr.starts_with("0x") || addr.len() != 18 {
         bail!(
@@ -236,6 +265,27 @@ mod tests {
         assert!(validate_time_str("24:00", "test").is_err());
         assert!(validate_time_str("12:60", "test").is_err());
         assert!(validate_time_str("noon", "test").is_err());
+    }
+
+    #[test]
+    fn test_validate_api() {
+        let mut api = ApiConfig::default();
+        assert!(validate_api(&api).is_ok());
+
+        api.bind = "localhost".to_string();
+        assert!(validate_api(&api).is_err());
+        // A disabled API's bind address is never used, so it isn't checked.
+        api.enabled = false;
+        assert!(validate_api(&api).is_ok());
+
+        let mut api = ApiConfig {
+            token: Some("  ".to_string()),
+            ..ApiConfig::default()
+        };
+        assert!(validate_api(&api).is_err());
+        api.token = Some("s3cret".to_string());
+        api.bind = "0.0.0.0:8420".to_string();
+        assert!(validate_api(&api).is_ok());
     }
 
     #[test]
