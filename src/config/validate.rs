@@ -193,10 +193,17 @@ pub fn validate_api(api: &ApiConfig) -> Result<()> {
             api.bind
         )
     })?;
-    if let Some(ref token) = api.token
-        && token.trim().is_empty()
-    {
-        bail!("api.token is set but empty. Remove it to disable authentication.");
+    if let Some(ref token) = api.token {
+        if token.is_empty() {
+            bail!("api.token is set but empty. Remove it to disable authentication.");
+        }
+        // Clients send the token in an `Authorization: Bearer` header, which
+        // can't carry it intact if it has spaces or non-ASCII characters.
+        if !token.bytes().all(|b| b.is_ascii_graphic()) {
+            bail!(
+                "api.token may only contain visible ASCII characters (no spaces, tabs or non-ASCII)."
+            );
+        }
     }
     if !addr.ip().is_loopback() && api.token.is_none() {
         warn!(
@@ -283,6 +290,10 @@ mod tests {
             ..ApiConfig::default()
         };
         assert!(validate_api(&api).is_err());
+        for token in ["", " s3cret", "s3c ret", "s3cret\t", "sëcret"] {
+            api.token = Some(token.to_string());
+            assert!(validate_api(&api).is_err(), "{:?}", token);
+        }
         api.token = Some("s3cret".to_string());
         api.bind = "0.0.0.0:8420".to_string();
         assert!(validate_api(&api).is_ok());

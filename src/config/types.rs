@@ -192,7 +192,8 @@ pub struct ApiConfig {
     #[serde(default = "default_api_bind")]
     pub bind: String,
     /// Bearer token required on every request except `/api/health` and the
-    /// docs. Set this before binding to anything other than localhost.
+    /// docs. Visible ASCII only (no spaces). Set this before binding to
+    /// anything other than localhost.
     /// Default: unset (no authentication).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
