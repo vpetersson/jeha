@@ -103,7 +103,7 @@
           "lights"
         ],
         "summary": "Turn a room's lights on.",
-        "description": "With no brightness or colour temperature the lights come on at the current\ncircadian target. Setting either one is a manual override: circadian stops\nadjusting the room until `override_ttl_mins` runs out or circadian is resumed.",
+        "description": "With no brightness or colour temperature, only `state: ON` is sent: the\nlights come back at their last state and move to the circadian target on\nthe next circadian update (unless circadian is paused or snoozed). Setting\neither one is a manual override: circadian stops adjusting the room until\n`override_ttl_mins` runs out or circadian is resumed.",
         "operationId": "light_on",
         "parameters": [
           {
@@ -117,7 +117,7 @@
           }
         ],
         "requestBody": {
-          "description": "Optional; omit the body (and Content-Type) to use the circadian target",
+          "description": "Optional; the body (and Content-Type) may be omitted",
           "content": {
             "application/json": {
               "schema": {
@@ -1092,7 +1092,7 @@
       },
       "LightOnRequest": {
         "type": "object",
-        "description": "Turn a room's lights on. All fields are optional: an empty body turns the\nlights on at the current circadian target.",
+        "description": "Turn a room's lights on. All fields are optional. Without `brightness` or\n`color_temp_k`, only `state: ON` is sent and circadian control of the room\nis restored; the lights move to the circadian target on the next circadian\nupdate unless circadian is paused or snoozed.",
         "properties": {
           "brightness": {
             "type": [

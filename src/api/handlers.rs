@@ -73,7 +73,14 @@ impl IntoResponse for ApiError {
             ApiError::MethodNotAllowed(msg) => (StatusCode::METHOD_NOT_ALLOWED, msg),
             ApiError::Internal(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
-        (status, Json(ErrorResponse { error: message })).into_response()
+        let mut response = (status, Json(ErrorResponse { error: message })).into_response();
+        if status == StatusCode::UNAUTHORIZED {
+            response.headers_mut().insert(
+                axum::http::header::WWW_AUTHENTICATE,
+                axum::http::HeaderValue::from_static("Bearer"),
+            );
+        }
+        response
     }
 }
 
@@ -374,15 +381,17 @@ pub async fn get_room(
 
 /// Turn a room's lights on.
 ///
-/// With no brightness or colour temperature the lights come on at the current
-/// circadian target. Setting either one is a manual override: circadian stops
-/// adjusting the room until `override_ttl_mins` runs out or circadian is resumed.
+/// With no brightness or colour temperature, only `state: ON` is sent: the
+/// lights come back at their last state and move to the circadian target on
+/// the next circadian update (unless circadian is paused or snoozed). Setting
+/// either one is a manual override: circadian stops adjusting the room until
+/// `override_ttl_mins` runs out or circadian is resumed.
 #[utoipa::path(
     post,
     path = "/api/rooms/{room_id}/light/on",
     tag = "lights",
     params(("room_id" = String, Path, description = "Room ID")),
-    request_body(content = LightOnRequest, description = "Optional; omit the body (and Content-Type) to use the circadian target"),
+    request_body(content = LightOnRequest, description = "Optional; the body (and Content-Type) may be omitted"),
     responses(
         (status = 200, description = "Done", body = ActionResponse),
         (status = 400, description = "Invalid request body", body = ErrorResponse),

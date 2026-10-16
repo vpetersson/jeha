@@ -9,8 +9,10 @@ use utoipa::ToSchema;
 
 // --- Requests ---
 
-/// Turn a room's lights on. All fields are optional: an empty body turns the
-/// lights on at the current circadian target.
+/// Turn a room's lights on. All fields are optional. Without `brightness` or
+/// `color_temp_k`, only `state: ON` is sent and circadian control of the room
+/// is restored; the lights move to the circadian target on the next circadian
+/// update unless circadian is paused or snoozed.
 #[derive(Debug, Default, Deserialize, ToSchema)]
 pub struct LightOnRequest {
     /// Brightness, 1-254. Setting this (or `color_temp_k`) is a manual override.

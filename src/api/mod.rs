@@ -421,6 +421,13 @@ lights = ["0x001788010AAAAAA1"]
                 .unwrap();
             let res = app.clone().oneshot(req).await.unwrap();
             assert_eq!(res.status(), expected, "{}", header);
+            if expected == StatusCode::UNAUTHORIZED {
+                // RFC 9110: a 401 must carry a challenge.
+                assert_eq!(
+                    res.headers()[axum::http::header::WWW_AUTHENTICATE],
+                    "Bearer"
+                );
+            }
         }
     }
 
