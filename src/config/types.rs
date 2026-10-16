@@ -145,13 +145,16 @@ pub struct CircadianDefaults {
 
 /// Brightness used when daylight is at its shortest. jeha blends between the
 /// regular circadian brightness (18h+ of daylight) and these values (6h or less)
-/// based on today's day length at `general.latitude`.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
+/// based on today's day length at `general.latitude`. Unset values are derived
+/// from the regular curve; see `CircadianDefaults::winter_targets`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct WinterBrightness {
-    pub start_brightness: u8,
-    pub peak_brightness: u8,
-    pub end_brightness: u8,
+    /// Default: 230, or the regular start brightness if that is higher.
+    pub start_brightness: Option<u8>,
+    /// Default: 254.
+    pub peak_brightness: Option<u8>,
+    /// Default: the regular end brightness, so bedtime is never lifted.
+    pub end_brightness: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -270,14 +273,7 @@ pub struct CircadianOverride {
     pub curve: Option<CurveType>,
     pub transition_secs: Option<u32>,
     pub update_interval_secs: Option<u64>,
-    pub winter: Option<WinterBrightnessOverride>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct WinterBrightnessOverride {
-    pub start_brightness: Option<u8>,
-    pub peak_brightness: Option<u8>,
-    pub end_brightness: Option<u8>,
+    pub winter: Option<WinterBrightness>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

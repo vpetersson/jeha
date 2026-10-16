@@ -137,6 +137,7 @@ impl CircadianEngine {
     fn params_for_room(&self, room_config: &RoomConfig) -> CircadianParams {
         let defaults = room_config.effective_circadian(&self.config.circadian.defaults);
         let weight = self.winter_weight();
+        let (winter_start, winter_peak, winter_end) = defaults.winter_targets();
         CircadianParams {
             wake_minutes: parse_time_to_minutes(&defaults.wake_time),
             sleep_minutes: parse_time_to_minutes(&defaults.sleep_time),
@@ -146,19 +147,15 @@ impl CircadianEngine {
             end_temp_k: defaults.end_temp_k,
             start_brightness: season::blend_brightness(
                 defaults.start_brightness,
-                defaults.winter.start_brightness,
+                winter_start,
                 weight,
             ),
             peak_brightness: season::blend_brightness(
                 defaults.peak_brightness,
-                defaults.winter.peak_brightness,
+                winter_peak,
                 weight,
             ),
-            end_brightness: season::blend_brightness(
-                defaults.end_brightness,
-                defaults.winter.end_brightness,
-                weight,
-            ),
+            end_brightness: season::blend_brightness(defaults.end_brightness, winter_end, weight),
             curve: defaults.curve,
         }
     }

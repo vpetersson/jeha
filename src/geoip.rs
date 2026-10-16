@@ -62,7 +62,7 @@ pub fn round_latitude(latitude: f64) -> f64 {
 pub async fn persist_latitude(config_path: &Path, latitude: f64) -> Result<()> {
     let content = tokio::fs::read_to_string(config_path).await?;
     let Some(updated) = insert_latitude(&content, latitude) else {
-        bail!("config uses dotted `general.*` keys; add `latitude` by hand");
+        bail!("couldn't add `latitude` to this config layout safely; add it by hand");
     };
     // Write atomically (temp file + rename), same as config sync
     let tmp_path = config_path.with_extension("toml.tmp");
@@ -71,11 +71,29 @@ pub async fn persist_latitude(config_path: &Path, latitude: f64) -> Result<()> {
     Ok(())
 }
 
-/// Insert `latitude = …` as the first key of `[general]`, creating the table if
-/// needed. Returns `None` when the file sets `general` keys without a `[general]`
-/// header (dotted keys or an inline table), where appending a table would make
-/// the TOML invalid.
+/// Insert `latitude = …` into the config text, keeping the user's formatting and
+/// comments. The edit is line-based, so it is verified by parsing: the result must
+/// be the original document plus `general.latitude` and nothing else. Anything
+/// the line edit can't handle (e.g. `[ general ]`, dotted `general.*` keys, a
+/// `[general]` line inside a multi-line string) returns `None` and the file is
+/// left untouched.
 fn insert_latitude(content: &str, latitude: f64) -> Option<String> {
+    let original: toml::Table = content.parse().ok()?;
+    let updated = insert_latitude_line(content, latitude)?;
+    let mut parsed: toml::Table = updated.parse().ok()?;
+    let general = parsed.get_mut("general")?.as_table_mut()?;
+    if general.remove("latitude")?.as_float()? != latitude {
+        return None;
+    }
+    if general.is_empty() && !original.contains_key("general") {
+        parsed.remove("general");
+    }
+    (parsed == original).then_some(updated)
+}
+
+/// Best-effort line edit: add `latitude` as the first key of a `[general]` header,
+/// or append a new `[general]` table when the file has none.
+fn insert_latitude_line(content: &str, latitude: f64) -> Option<String> {
     let line = format!(
         "latitude = {}  # Set automatically from GeoIP — edit if wrong",
         latitude
@@ -166,5 +184,30 @@ mod tests {
     fn test_insert_refuses_dotted_general_keys() {
         let content = "schema_version = 1\ngeneral.timezone = \"UTC\"\n";
         assert!(insert_latitude(content, 59.33).is_none());
+    }
+
+    #[test]
+    fn test_insert_refuses_layouts_it_cannot_edit() {
+        // Valid TOML that the line edit doesn't recognise as the [general] header.
+        // Appending a second [general] table would make the file unparseable.
+        for content in [
+            "schema_version = 1\n[ general ]\ntimezone = \"UTC\"\n",
+            "schema_version = 1\n[\"general\"]\ntimezone = \"UTC\"\n",
+            "schema_version = 1\ngeneral . timezone = \"UTC\"\n",
+            "schema_version = 1\ngeneral = { timezone = \"UTC\" }\n",
+        ] {
+            assert!(insert_latitude(content, 59.33).is_none(), "{content}");
+        }
+    }
+
+    #[test]
+    fn test_insert_ignores_header_inside_multiline_string() {
+        let content = "schema_version = 1\nnote = \"\"\"\n[general]\n\"\"\"\n";
+        assert!(insert_latitude(content, 59.33).is_none());
+    }
+
+    #[test]
+    fn test_insert_refuses_unparseable_config() {
+        assert!(insert_latitude("schema_version = [", 59.33).is_none());
     }
 }

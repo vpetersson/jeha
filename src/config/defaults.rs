@@ -49,13 +49,22 @@ impl Default for CircadianDefaults {
     }
 }
 
-impl Default for WinterBrightness {
-    fn default() -> Self {
-        Self {
-            start_brightness: 230,
-            peak_brightness: 254,
-            end_brightness: 77,
-        }
+const DEFAULT_WINTER_START_BRIGHTNESS: u8 = 230;
+const DEFAULT_WINTER_PEAK_BRIGHTNESS: u8 = 254;
+
+impl CircadianDefaults {
+    /// Resolved (start, peak, end) brightness for the darkest days. Unset values
+    /// only ever lift the morning and day, and never touch bedtime: the end
+    /// target follows the regular `end_brightness` unless set explicitly.
+    pub fn winter_targets(&self) -> (u8, u8, u8) {
+        let w = &self.winter;
+        (
+            w.start_brightness
+                .unwrap_or(DEFAULT_WINTER_START_BRIGHTNESS.max(self.start_brightness)),
+            w.peak_brightness
+                .unwrap_or(DEFAULT_WINTER_PEAK_BRIGHTNESS.max(self.peak_brightness)),
+            w.end_brightness.unwrap_or(self.end_brightness),
+        )
     }
 }
 
@@ -106,9 +115,9 @@ impl RoomConfig {
                 update_interval_secs: o.update_interval_secs.unwrap_or(d.update_interval_secs),
                 winter: match &o.winter {
                     Some(w) => WinterBrightness {
-                        start_brightness: w.start_brightness.unwrap_or(d.winter.start_brightness),
-                        peak_brightness: w.peak_brightness.unwrap_or(d.winter.peak_brightness),
-                        end_brightness: w.end_brightness.unwrap_or(d.winter.end_brightness),
+                        start_brightness: w.start_brightness.or(d.winter.start_brightness),
+                        peak_brightness: w.peak_brightness.or(d.winter.peak_brightness),
+                        end_brightness: w.end_brightness.or(d.winter.end_brightness),
                     },
                     None => d.winter,
                 },

@@ -152,9 +152,9 @@ Only brightness is adjusted, and only during the morning and day: the evening wi
 
 ```toml
 [circadian.defaults.winter]
-start_brightness = 230        # Dark mornings: wake up to more light (regular: 150)
+start_brightness = 230        # Dark mornings: wake up to more light (or the regular value, if higher)
 peak_brightness = 254         # Midday (regular: 254)
-end_brightness = 77           # Bedtime is not lifted, see ADR-0004 (regular: 77)
+# end_brightness = …           # Unset: follows the regular end_brightness, so bedtime is never lifted
 ```
 
 Override per room:

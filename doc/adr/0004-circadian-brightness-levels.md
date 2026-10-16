@@ -44,7 +44,7 @@ These estimates assume typical domestic fittings, because light at the eye depen
 ## Decision
 
 1. **Keep a clock-anchored curve.** jeha does not follow Adaptive Lighting and dim from sunset. In winter that cuts light when it's most needed, and the guidance anchors the evening wind-down to bedtime, not to the sun.
-2. **Winter mode lifts the morning and day, never the evening.** The winter defaults are `start_brightness = 230` (up from 150) and `peak_brightness = 254` (already at maximum). `end_brightness` stays at 77, the same as the regular curve. An earlier draft lifted it to 110, which would push bedtime light further above the 10 lux melanopic evening limit.
+2. **Winter mode lifts the morning and day, never the evening.** The winter defaults are `start_brightness = 230` (up from 150) and `peak_brightness = 254` (already at maximum). The winter `end_brightness` has no fixed default: it follows each room's regular `end_brightness`, so bedtime is never lifted, including in rooms tuned dimmer than the default. Likewise, the default winter start never dims a room whose regular start is already brighter. An earlier draft lifted it to 110, which would push bedtime light further above the 10 lux melanopic evening limit.
 3. **Brightness follows day length continuously through the year, not a winter/summer switch.** Each day's weight is a linear blend between 18h of daylight or more (regular values) and 6h or less (winter values). The band is wide enough that populated latitudes rarely reach either end, so brightness moves a little every day. At the equator, with about 12h of daylight all year, the lift stays at about half. The lift tracks how little daylight there actually is, not the calendar date.
 
 ## Consequences
