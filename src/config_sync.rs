@@ -156,12 +156,10 @@ impl ConfigSync {
             );
         }
 
-        // Read existing config, append, write back atomically (temp file + rename)
+        // Read existing config, append, write back
         let existing = tokio::fs::read_to_string(&self.config_path).await?;
         let updated = format!("{}{}", existing.trim_end(), additions);
-        let tmp_path = self.config_path.with_extension("toml.tmp");
-        tokio::fs::write(&tmp_path, &updated).await?;
-        tokio::fs::rename(&tmp_path, &self.config_path).await?;
+        crate::config::write_config(&self.config_path, &updated).await?;
 
         for (room_id, group_name) in &new_entries {
             self.appended_room_ids.insert(room_id.clone());

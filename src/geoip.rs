@@ -64,11 +64,7 @@ pub async fn persist_latitude(config_path: &Path, latitude: f64) -> Result<()> {
     let Some(updated) = insert_latitude(&content, latitude) else {
         bail!("couldn't add `latitude` to this config layout safely; add it by hand");
     };
-    // Write atomically (temp file + rename), same as config sync
-    let tmp_path = config_path.with_extension("toml.tmp");
-    tokio::fs::write(&tmp_path, &updated).await?;
-    tokio::fs::rename(&tmp_path, config_path).await?;
-    Ok(())
+    crate::config::write_config(config_path, &updated).await
 }
 
 /// Insert `latitude = …` into the config text, keeping the user's formatting and

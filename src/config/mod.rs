@@ -3,6 +3,7 @@ pub mod migrate;
 pub mod types;
 pub mod validate;
 
+use std::io;
 use std::path::Path;
 
 use anyhow::Result;
@@ -15,9 +16,71 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
     Ok(config)
 }
 
+/// Write `content` to the config file, atomically where possible (temp file + rename).
+///
+/// When the config is a single-file bind mount (`./config.toml:/config.toml` in
+/// Docker), the path is a mount point and can't be replaced by rename: the kernel
+/// returns EBUSY (or EXDEV if the temp file landed on another filesystem). In that
+/// case fall back to overwriting the file in place.
+pub async fn write_config(path: &Path, content: &str) -> Result<()> {
+    let tmp_path = path.with_extension("toml.tmp");
+    let renamed = match tokio::fs::write(&tmp_path, content).await {
+        Ok(()) => tokio::fs::rename(&tmp_path, path).await,
+        Err(e) => Err(e),
+    };
+    match renamed {
+        Ok(()) => Ok(()),
+        Err(e) if needs_in_place_write(&e) => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            tokio::fs::write(path, content).await?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = tokio::fs::remove_file(&tmp_path).await;
+            Err(e.into())
+        }
+    }
+}
+
+/// Errors from the temp-file + rename path that an in-place write can still get past.
+fn needs_in_place_write(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::ResourceBusy
+            | io::ErrorKind::CrossesDevices
+            | io::ErrorKind::PermissionDenied
+            | io::ErrorKind::ReadOnlyFilesystem
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_write_config_replaces_file() {
+        let dir = std::env::temp_dir().join(format!("jeha-write-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, "old = 1\n").unwrap();
+
+        write_config(&path, "new = 2\n").await.unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new = 2\n");
+        assert!(!path.with_extension("toml.tmp").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn test_bind_mount_errors_fall_back_to_in_place_write() {
+        // EBUSY is what rename(2) returns when the target is a bind-mount point
+        assert!(needs_in_place_write(&io::Error::from_raw_os_error(16)));
+        // EXDEV: temp file on a different filesystem
+        assert!(needs_in_place_write(&io::Error::from_raw_os_error(18)));
+        assert!(!needs_in_place_write(&io::Error::from(
+            io::ErrorKind::NotFound
+        )));
+    }
 
     #[test]
     fn test_minimal_config() {
