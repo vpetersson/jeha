@@ -1,4 +1,5 @@
 pub mod curve;
+pub mod season;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -47,6 +48,15 @@ impl CircadianEngine {
 
     pub async fn run(self) {
         info!("Circadian engine started");
+        if let Some(lat) = self.config.general.latitude {
+            let today = LocalNow::now(&self.config.general.timezone);
+            info!(
+                "Winter mode: {:.1}h of daylight at latitude {:.2}, winter weight {:.2}",
+                season::day_length_hours(lat, today.day_of_year),
+                lat,
+                season::winter_weight(lat, today.day_of_year)
+            );
+        }
         let interval_secs = self.config.circadian.defaults.update_interval_secs;
 
         if let Err(e) = self.update_all_rooms().await {
@@ -116,8 +126,17 @@ impl CircadianEngine {
         LocalNow::now(&self.config.general.timezone).minutes as u32
     }
 
+    /// Today's winter weight (0.0-1.0), or 0.0 when no latitude is configured.
+    fn winter_weight(&self) -> f64 {
+        self.config.general.latitude.map_or(0.0, |lat| {
+            let today = LocalNow::now(&self.config.general.timezone);
+            season::winter_weight(lat, today.day_of_year)
+        })
+    }
+
     fn params_for_room(&self, room_config: &RoomConfig) -> CircadianParams {
         let defaults = room_config.effective_circadian(&self.config.circadian.defaults);
+        let weight = self.winter_weight();
         CircadianParams {
             wake_minutes: parse_time_to_minutes(&defaults.wake_time),
             sleep_minutes: parse_time_to_minutes(&defaults.sleep_time),
@@ -125,9 +144,21 @@ impl CircadianEngine {
             start_temp_k: defaults.start_temp_k,
             peak_temp_k: defaults.peak_temp_k,
             end_temp_k: defaults.end_temp_k,
-            start_brightness: defaults.start_brightness,
-            peak_brightness: defaults.peak_brightness,
-            end_brightness: defaults.end_brightness,
+            start_brightness: season::blend_brightness(
+                defaults.start_brightness,
+                defaults.winter.start_brightness,
+                weight,
+            ),
+            peak_brightness: season::blend_brightness(
+                defaults.peak_brightness,
+                defaults.winter.peak_brightness,
+                weight,
+            ),
+            end_brightness: season::blend_brightness(
+                defaults.end_brightness,
+                defaults.winter.end_brightness,
+                weight,
+            ),
             curve: defaults.curve,
         }
     }

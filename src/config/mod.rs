@@ -115,4 +115,53 @@ display_name = "Bad"
         let config: AppConfig = toml::from_str(toml_str).unwrap();
         assert!(validate::validate_config(&config).is_err());
     }
+
+    #[test]
+    fn test_winter_mode_config() {
+        let toml_str = r#"
+schema_version = 1
+
+[general]
+latitude = 59.33
+
+[circadian.defaults.winter]
+start_brightness = 240
+
+[rooms.kitchen]
+z2m_group = "Kitchen"
+
+[rooms.bedroom]
+z2m_group = "Bedroom"
+
+[rooms.bedroom.circadian.winter]
+end_brightness = 60
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        validate::validate_config(&config).unwrap();
+        assert_eq!(config.general.latitude, Some(59.33));
+
+        let defaults = &config.circadian.defaults;
+        assert_eq!(defaults.winter.start_brightness, 240);
+        assert_eq!(defaults.winter.end_brightness, 110);
+
+        let kitchen = config.rooms["kitchen"].effective_circadian(defaults);
+        assert_eq!(kitchen.winter.start_brightness, 240);
+        assert_eq!(kitchen.winter.end_brightness, 110);
+
+        let bedroom = config.rooms["bedroom"].effective_circadian(defaults);
+        assert_eq!(bedroom.winter.start_brightness, 240);
+        assert_eq!(bedroom.winter.end_brightness, 60);
+    }
+
+    #[test]
+    fn test_invalid_latitude() {
+        let toml_str = r#"
+schema_version = 1
+
+[general]
+latitude = 95.0
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        assert!(validate::validate_config(&config).is_err());
+    }
 }

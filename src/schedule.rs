@@ -241,6 +241,8 @@ pub struct LocalNow {
     pub minutes: u16,
     pub weekday: DayOfWeek,
     pub month: Month,
+    /// Day of the year in local time, 1-366.
+    pub day_of_year: u16,
 }
 
 impl LocalNow {
@@ -252,6 +254,7 @@ impl LocalNow {
             minutes: (local.hour() * 60 + local.minute()) as u16,
             weekday: DayOfWeek::from_chrono(local.weekday()),
             month: Month::from_chrono_month(local.month()),
+            day_of_year: local.ordinal() as u16,
         }
     }
 }
@@ -306,6 +309,7 @@ mod tests {
             minutes,
             weekday,
             month,
+            day_of_year: 1,
         }
     }
 

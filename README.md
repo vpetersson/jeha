@@ -77,6 +77,7 @@ external_brightness_tolerance = 15    # Brightness drift before detecting extern
 external_color_temp_tolerance = 25    # Color temp drift (mired) before detecting external change
 external_override_secs = 1800         # How long to pause circadian after external change (30 min)
 remote_brightness_step = 25           # Brightness step for remote dim up/down
+latitude = 59.33                      # Optional: enables winter mode (see below)
 ```
 
 ### Circadian defaults
@@ -117,6 +118,33 @@ circadian_enabled = false
 ```
 
 jeha auto-discovers new Z2M groups with lights and appends them to the config file. Restart or send SIGHUP to apply.
+
+### Winter mode
+
+Winter is darker than summer, so the same indoor light feels dimmer in December than in June. Set your latitude and jeha lifts circadian brightness as the days get shorter:
+
+```toml
+[general]
+latitude = 59.33              # Decimal degrees, negative for the southern hemisphere
+```
+
+jeha works out today's daylight hours at that latitude. With 16 hours or more it uses the regular circadian brightness. With 8 hours or less it uses the winter values. In between it blends the two. In Stockholm that means summer brightness in June, full winter brightness from November to January, and about halfway at the equinoxes. Near the equator (about 12 hours of daylight all year) you get a constant half-way lift. The southern hemisphere works the same way, with the seasons flipped. Without a latitude, nothing changes.
+
+Only brightness is adjusted. Wake and sleep times stay fixed, because they follow your schedule, not the sun. Winter defaults:
+
+```toml
+[circadian.defaults.winter]
+start_brightness = 230        # Dark mornings: wake up to more light (regular: 150)
+peak_brightness = 254         # Midday (regular: 254)
+end_brightness = 110          # Long dark evenings, still dim at bedtime (regular: 77)
+```
+
+Override per room:
+
+```toml
+[rooms.bedroom.circadian.winter]
+end_brightness = 77           # Keep bedtime as dim as in summer
+```
 
 ### Night mode
 
@@ -284,7 +312,7 @@ Errors use HTTP status codes (400, 404, 500) with `{"error": "message"}` body.
 
 ## Circadian curve
 
-Cosine interpolation between three points: wake (warm), midday (cool), sleep (warmest). 30-second transitions between updates make changes imperceptible. Configurable per room. Can be disabled per room with `circadian_enabled = false`.
+Cosine interpolation between three points: wake (warm), midday (cool), sleep (warmest). 30-second transitions between updates make changes imperceptible. With `general.latitude` set, brightness at each point is lifted on short winter days (see [Winter mode](#winter-mode)). Configurable per room. Can be disabled per room with `circadian_enabled = false`.
 
 ## Remote control bindings
 

@@ -69,6 +69,12 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
         }
     }
 
+    if let Some(lat) = config.general.latitude
+        && !(-90.0..=90.0).contains(&lat)
+    {
+        bail!("general.latitude must be between -90 and 90, got {}", lat);
+    }
+
     validate_time_str(
         &config.circadian.defaults.wake_time,
         "circadian.defaults.wake_time",

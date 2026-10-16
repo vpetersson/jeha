@@ -23,6 +23,7 @@ impl Default for GeneralConfig {
             manual_override_ttl_mins: 60,
             remote_brightness_step: 25,
             illuminance_threshold: 100,
+            latitude: None,
         }
     }
 }
@@ -42,6 +43,17 @@ impl Default for CircadianDefaults {
             curve: CurveType::Cosine,
             transition_secs: 30,
             update_interval_secs: 60,
+            winter: WinterBrightness::default(),
+        }
+    }
+}
+
+impl Default for WinterBrightness {
+    fn default() -> Self {
+        Self {
+            start_brightness: 230,
+            peak_brightness: 254,
+            end_brightness: 110,
         }
     }
 }
@@ -91,6 +103,14 @@ impl RoomConfig {
                 curve: o.curve.unwrap_or(d.curve),
                 transition_secs: o.transition_secs.unwrap_or(d.transition_secs),
                 update_interval_secs: o.update_interval_secs.unwrap_or(d.update_interval_secs),
+                winter: match &o.winter {
+                    Some(w) => WinterBrightness {
+                        start_brightness: w.start_brightness.unwrap_or(d.winter.start_brightness),
+                        peak_brightness: w.peak_brightness.unwrap_or(d.winter.peak_brightness),
+                        end_brightness: w.end_brightness.unwrap_or(d.winter.end_brightness),
+                    },
+                    None => d.winter,
+                },
             },
             None => d,
         }
