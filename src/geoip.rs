@@ -94,8 +94,10 @@ fn insert_latitude(content: &str, latitude: f64) -> Option<String> {
 /// Best-effort line edit: add `latitude` as the first key of a `[general]` header,
 /// or append a new `[general]` table when the file has none.
 fn insert_latitude_line(content: &str, latitude: f64) -> Option<String> {
+    // `{:?}` keeps a trailing `.0` on whole degrees (`52.0`, not `52`), so TOML
+    // reads it back as a float rather than an integer.
     let line = format!(
-        "latitude = {}  # Set automatically from GeoIP — edit if wrong",
+        "latitude = {:?}  # Set automatically from GeoIP — edit if wrong",
         latitude
     );
     let mut out = String::with_capacity(content.len() + line.len() + 16);
@@ -169,6 +171,16 @@ mod tests {
         let updated = insert_latitude(content, 59.33).unwrap();
         let config: AppConfig = toml::from_str(&updated).unwrap();
         assert_eq!(config.general.latitude, Some(59.33));
+    }
+
+    #[test]
+    fn test_insert_whole_degree_latitude() {
+        let content = "schema_version = 1\n\n[general]\ntimezone = \"UTC\"\n";
+        let updated = insert_latitude(content, 52.0).unwrap();
+        assert!(updated.contains("latitude = 52.0 "), "{updated}");
+        let config: AppConfig = toml::from_str(&updated).unwrap();
+        assert_eq!(config.general.latitude, Some(52.0));
+        assert_eq!(insert_latitude(content, -0.0).map(|_| ()), Some(()));
     }
 
     #[test]
