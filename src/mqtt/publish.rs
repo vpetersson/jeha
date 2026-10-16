@@ -175,6 +175,20 @@ impl Publisher {
         self.publish_to_ieee(ieee, &payload, &current).await
     }
 
+    /// Start (rate != 0) or stop (rate == 0) a native brightness ramp on a group.
+    /// `rate` is brightness units per second; negative dims down. The bulbs
+    /// interpolate on their own, so a single command gives a smooth ramp.
+    pub async fn brightness_move_group(&self, group_name: &str, rate: i16) -> Result<()> {
+        self.set_light_group(group_name, &json!({"brightness_move": rate}))
+            .await
+    }
+
+    /// Start (rate != 0) or stop (rate == 0) a native brightness ramp on a device.
+    pub async fn brightness_move_ieee(&self, ieee: &str, rate: i16) -> Result<()> {
+        self.set_light_ieee(ieee, &json!({"brightness_move": rate}))
+            .await
+    }
+
     pub async fn turn_off_ieee(&self, ieee: &str, transition: Option<u32>) -> Result<()> {
         let mut payload = json!({"state": "OFF"});
         if let Some(t) = transition {
