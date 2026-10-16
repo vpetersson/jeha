@@ -140,20 +140,20 @@ geoip_lookup = false          # No network lookup; winter mode only if latitude 
 
 jeha works out today's daylight hours at that latitude. With 16 hours or more it uses the regular circadian brightness. With 8 hours or less it uses the winter values. In between it blends the two. In Stockholm that means summer brightness in June, full winter brightness from November to January, and about halfway at the equinoxes. Near the equator (about 12 hours of daylight all year) you get a constant half-way lift. The southern hemisphere works the same way, with the seasons flipped. With no latitude (lookup off or failed), brightness is the same all year.
 
-Only brightness is adjusted. Wake and sleep times stay fixed, because they follow your schedule, not the sun. Winter defaults:
+Only brightness is adjusted, and only during the morning and day: the evening wind-down is the same all year. Wake and sleep times stay fixed, because they follow your schedule, not the sun. See [ADR-0004](doc/adr/0004-circadian-brightness-levels.md) for how the levels were chosen. Winter defaults:
 
 ```toml
 [circadian.defaults.winter]
 start_brightness = 230        # Dark mornings: wake up to more light (regular: 150)
 peak_brightness = 254         # Midday (regular: 254)
-end_brightness = 110          # Long dark evenings, still dim at bedtime (regular: 77)
+end_brightness = 77           # Bedtime is not lifted, see ADR-0004 (regular: 77)
 ```
 
 Override per room:
 
 ```toml
 [rooms.bedroom.circadian.winter]
-end_brightness = 77           # Keep bedtime as dim as in summer
+start_brightness = 180        # Gentler winter wake-up in the bedroom
 ```
 
 ### Night mode

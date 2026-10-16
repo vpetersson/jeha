@@ -142,11 +142,11 @@ end_brightness = 60
 
         let defaults = &config.circadian.defaults;
         assert_eq!(defaults.winter.start_brightness, 240);
-        assert_eq!(defaults.winter.end_brightness, 110);
+        assert_eq!(defaults.winter.end_brightness, 77);
 
         let kitchen = config.rooms["kitchen"].effective_circadian(defaults);
         assert_eq!(kitchen.winter.start_brightness, 240);
-        assert_eq!(kitchen.winter.end_brightness, 110);
+        assert_eq!(kitchen.winter.end_brightness, 77);
 
         let bedroom = config.rooms["bedroom"].effective_circadian(defaults);
         assert_eq!(bedroom.winter.start_brightness, 240);

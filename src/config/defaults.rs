@@ -54,7 +54,7 @@ impl Default for WinterBrightness {
         Self {
             start_brightness: 230,
             peak_brightness: 254,
-            end_brightness: 110,
+            end_brightness: 77,
         }
     }
 }
