@@ -142,7 +142,7 @@ pub struct CircadianDefaults {
 }
 
 /// Brightness used when daylight is at its shortest. jeha blends between the
-/// regular circadian brightness (16h+ of daylight) and these values (8h or less)
+/// regular circadian brightness (18h+ of daylight) and these values (6h or less)
 /// based on today's day length at `general.latitude`.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]

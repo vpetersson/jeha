@@ -138,7 +138,15 @@ Edit the value if the guess is off (VPNs and some ISPs geolocate to the wrong ci
 geoip_lookup = false          # No network lookup; winter mode only if latitude is set
 ```
 
-jeha works out today's daylight hours at that latitude. With 16 hours or more it uses the regular circadian brightness. With 8 hours or less it uses the winter values. In between it blends the two. In Stockholm that means summer brightness in June, full winter brightness from November to January, and about halfway at the equinoxes. Near the equator (about 12 hours of daylight all year) you get a constant half-way lift. The southern hemisphere works the same way, with the seasons flipped. With no latitude (lookup off or failed), brightness is the same all year.
+Brightness changes gradually through the year, not as a winter/summer switch. Every day, jeha works out that day's daylight hours at your latitude and blends between the regular brightness (18 hours of daylight or more) and the winter values (6 hours or less). The `winter` values are the target for the darkest days; most days sit somewhere in between. Wake-up brightness (`start_brightness`, regular 150, winter 230) through the year:
+
+| | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Stockholm | 225 | 209 | 193 | 174 | 157 | 150 | 151 | 166 | 185 | 203 | 220 | 229 |
+| London | 215 | 204 | 192 | 178 | 166 | 159 | 162 | 173 | 186 | 200 | 212 | 218 |
+| Madrid | 206 | 199 | 191 | 182 | 174 | 170 | 171 | 178 | 187 | 196 | 204 | 208 |
+
+Near the equator (about 12 hours of daylight all year) it stays at about halfway (189). The southern hemisphere works the same way, with the seasons flipped. With no latitude (lookup off or failed), brightness is the same all year.
 
 Only brightness is adjusted, and only during the morning and day: the evening wind-down is the same all year. Wake and sleep times stay fixed, because they follow your schedule, not the sun. See [ADR-0004](doc/adr/0004-circadian-brightness-levels.md) for how the levels were chosen. Winter defaults:
 

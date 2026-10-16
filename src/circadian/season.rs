@@ -6,9 +6,13 @@
 //! year) gets a constant mild lift while Stockholm swings fully between the two.
 
 /// Daylight at or above this gets the regular circadian brightness.
-const LONG_DAY_HOURS: f64 = 16.0;
+const LONG_DAY_HOURS: f64 = 18.0;
 /// Daylight at or below this gets the full winter brightness.
-const SHORT_DAY_HOURS: f64 = 8.0;
+///
+/// The band is wide on purpose: Stockholm's daylight (6h–18.6h) barely
+/// touches either end, so brightness keeps shifting through the whole year
+/// instead of sitting flat at summer or winter values for months.
+const SHORT_DAY_HOURS: f64 = 6.0;
 
 /// Sun altitude at sunrise/sunset: refraction plus the solar disc radius.
 const SUNRISE_ALTITUDE_DEG: f64 = -0.833;
@@ -79,10 +83,20 @@ mod tests {
     #[test]
     fn test_weight_follows_seasons_in_stockholm() {
         assert_eq!(winter_weight(STOCKHOLM, JUNE_21), 0.0);
-        assert_eq!(winter_weight(STOCKHOLM, DEC_21), 1.0);
+        assert!(winter_weight(STOCKHOLM, DEC_21) > 0.95);
         // Equinox: ~12h → halfway
         let equinox = winter_weight(STOCKHOLM, 80);
         assert!((equinox - 0.5).abs() < 0.05, "equinox {equinox}");
+    }
+
+    #[test]
+    fn test_weight_changes_every_month() {
+        // No flat summer/winter plateaus: each month in London differs from the next
+        // through the year (mid-month day-of-year, Jan..Jun is rising daylight).
+        let months = [15, 46, 74, 105, 135, 166];
+        let weights: Vec<f64> = months.iter().map(|&d| winter_weight(51.52, d)).collect();
+        assert!(weights.windows(2).all(|w| w[0] > w[1]), "{weights:?}");
+        assert!(weights.iter().all(|&w| w > 0.0 && w < 1.0), "{weights:?}");
     }
 
     #[test]
