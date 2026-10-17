@@ -102,6 +102,8 @@ pub struct RoomState {
     pub intended_brightness: Option<u8>,
     pub intended_color_temp_mired: Option<u16>,
     pub last_illuminance: Option<crate::event::Illuminance>,
+    /// A wake-up alarm is fading the lights in right now.
+    pub alarm_active: bool,
 }
 
 impl Default for RoomState {
@@ -122,6 +124,7 @@ impl Default for RoomState {
             intended_brightness: None,
             intended_color_temp_mired: None,
             last_illuminance: None,
+            alarm_active: false,
         }
     }
 }
@@ -169,6 +172,18 @@ pub struct SystemState {
     pub started_at: Option<Instant>,
     /// Wake/sleep times set at runtime through the API.
     pub schedule_override: ScheduleOverride,
+    /// Alarm settings set at runtime through the API, keyed by alarm id.
+    pub alarm_overrides: HashMap<String, AlarmOverride>,
+}
+
+/// Alarm settings set at runtime (`PUT /api/alarms/{id}`). Each field that is
+/// set replaces the alarm's value from config. Not persisted: a restart goes
+/// back to the config file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlarmOverride {
+    pub time: Option<crate::schedule::TimeOfDay>,
+    pub days: Option<Vec<crate::schedule::DayOfWeek>>,
+    pub enabled: Option<bool>,
 }
 
 /// Wake and sleep times set at runtime (`PUT /api/circadian/schedule`). They
@@ -195,6 +210,31 @@ impl SystemState {
             d.sleep_time = sleep.clone();
         }
         d
+    }
+
+    /// The alarms from config with the runtime overrides applied.
+    pub fn effective_alarms(
+        &self,
+        alarms: &[crate::config::types::AlarmConfig],
+    ) -> Vec<crate::config::types::AlarmConfig> {
+        alarms
+            .iter()
+            .map(|alarm| {
+                let mut a = alarm.clone();
+                if let Some(o) = self.alarm_overrides.get(&alarm.id) {
+                    if let Some(time) = o.time {
+                        a.time = time;
+                    }
+                    if let Some(ref days) = o.days {
+                        a.days = days.clone();
+                    }
+                    if let Some(enabled) = o.enabled {
+                        a.enabled = enabled;
+                    }
+                }
+                a
+            })
+            .collect()
     }
 
     /// Whether a device is available per Z2M availability topics.
@@ -227,6 +267,11 @@ pub enum StateCommand {
     SetMqttConnected(bool),
     SetZ2mOnline(bool),
     SetScheduleOverride(ScheduleOverride),
+    /// Set (`Some`) or clear (`None`) the runtime override for one alarm.
+    SetAlarmOverride {
+        alarm_id: String,
+        alarm: Option<AlarmOverride>,
+    },
 }
 
 pub enum RoomStateUpdate {
@@ -261,6 +306,8 @@ pub enum RoomStateUpdate {
         ttl_secs: u64,
     },
     Illuminance(crate::event::Illuminance),
+    /// A wake-up alarm started or stopped fading the lights in.
+    Alarm(bool),
     /// Roll back the light-related fields of a room to a previously captured
     /// snapshot after a failed MQTT publish. Only the fields the optimistic
     /// LightsOn/LightsOff/LightsOnWithPush updates touch are restored, so
@@ -474,6 +521,9 @@ impl StateManager {
                         RoomStateUpdate::Illuminance(val) => {
                             room.last_illuminance = Some(val);
                         }
+                        RoomStateUpdate::Alarm(active) => {
+                            room.alarm_active = active;
+                        }
                         RoomStateUpdate::RestoreLights(snapshot) => {
                             room.lights_on = snapshot.lights_on;
                             room.current_brightness = snapshot.current_brightness;
@@ -502,6 +552,14 @@ impl StateManager {
                 StateCommand::SetScheduleOverride(schedule) => {
                     current.schedule_override = schedule;
                 }
+                StateCommand::SetAlarmOverride { alarm_id, alarm } => match alarm {
+                    Some(o) => {
+                        current.alarm_overrides.insert(alarm_id, o);
+                    }
+                    None => {
+                        current.alarm_overrides.remove(&alarm_id);
+                    }
+                },
             }
             self.state.store(Arc::new(current));
             for event in availability_events {

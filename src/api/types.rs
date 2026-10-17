@@ -338,3 +338,54 @@ pub struct HouseNightModeResponse {
     pub failed: Vec<RoomError>,
     pub description: String,
 }
+
+/// Change an alarm at runtime. Each field that is set replaces the value from
+/// config.toml; a field left out goes back to the config value.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetAlarmRequest {
+    /// When the lights are fully on, `HH:MM` (24h).
+    #[schema(example = "07:15")]
+    pub time: Option<String>,
+    /// Days the alarm rings on. An empty list means every day.
+    #[schema(example = json!(["mon", "tue", "wed", "thu", "fri"]))]
+    pub days: Option<Vec<crate::schedule::DayOfWeek>>,
+    /// Switch the alarm on or off.
+    pub enabled: Option<bool>,
+}
+
+/// A wake-up alarm.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AlarmInfo {
+    #[schema(example = "weekdays")]
+    pub id: String,
+    pub rooms: Vec<String>,
+    /// When the lights are fully on, `HH:MM`.
+    #[schema(example = "06:30")]
+    pub time: String,
+    /// Days the alarm rings on. Empty: every day.
+    pub days: Vec<crate::schedule::DayOfWeek>,
+    pub enabled: bool,
+    /// Minutes the lights take to fade in, ending at `time`.
+    pub fade_mins: u32,
+    /// Brightness at the end of the fade. Absent: the circadian brightness.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brightness: Option<u8>,
+    /// Colour temperature at the end of the fade. Absent: the circadian value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color_temp_k: Option<u16>,
+    /// `api` when `time`, `days` or `enabled` were changed through the API.
+    pub source: ScheduleSource,
+    /// Next time the lights are fully on, local time (`YYYY-MM-DDTHH:MM`).
+    /// Absent when the alarm is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(example = "2026-10-19T06:30")]
+    pub next: Option<String>,
+    /// Rooms that are fading in right now.
+    pub fading_rooms: Vec<String>,
+    pub description: String,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AlarmList {
+    pub alarms: Vec<AlarmInfo>,
+}

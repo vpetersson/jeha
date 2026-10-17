@@ -95,7 +95,9 @@ impl JsonSchema for TimeOfDay {
 }
 
 /// Day of week for schedule filtering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum DayOfWeek {
     Mon,
@@ -108,7 +110,7 @@ pub enum DayOfWeek {
 }
 
 impl DayOfWeek {
-    fn from_chrono(wd: chrono::Weekday) -> Self {
+    pub fn from_chrono(wd: chrono::Weekday) -> Self {
         match wd {
             chrono::Weekday::Mon => Self::Mon,
             chrono::Weekday::Tue => Self::Tue,

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::schedule::Schedule;
+use crate::schedule::{DayOfWeek, Schedule, TimeOfDay};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AppConfig {
@@ -26,6 +26,8 @@ pub struct AppConfig {
     pub light_calibration: LightCalibrationConfig,
     #[serde(default)]
     pub automations: Vec<AutomationConfig>,
+    #[serde(default)]
+    pub alarms: Vec<AlarmConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -313,6 +315,36 @@ pub struct AutomationConfig {
     pub schedule: Option<Schedule>,
     #[serde(default)]
     pub conditions: Vec<crate::automation::condition::ConditionConfig>,
+}
+
+/// A wake-up alarm: the room's lights fade in slowly so they are fully on at
+/// `time`. Add one entry per schedule to wake at different times on different
+/// days (e.g. one for weekdays, one for the weekend).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AlarmConfig {
+    pub id: String,
+    pub rooms: Vec<String>,
+    /// When the lights reach full brightness, "HH:MM". The fade starts
+    /// `fade_mins` earlier.
+    pub time: TimeOfDay,
+    /// Days the alarm rings on (the day of `time`). Empty: every day.
+    #[serde(default)]
+    pub days: Vec<DayOfWeek>,
+    /// Length of the fade-in, in minutes (1-180). Default: 30.
+    #[serde(default = "default_alarm_fade_mins")]
+    pub fade_mins: u32,
+    /// Brightness at the end of the fade (1-254). Default: the circadian
+    /// brightness at `time` (or at wake_time, if the alarm is earlier).
+    pub brightness: Option<u8>,
+    /// Colour temperature at the end of the fade. Default: the circadian
+    /// colour temperature, picked the same way as `brightness`.
+    pub color_temp_k: Option<u16>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+fn default_alarm_fade_mins() -> u32 {
+    30
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

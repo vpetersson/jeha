@@ -246,13 +246,27 @@ impl CircadianEngine {
     }
 
     pub fn compute_room_target(&self, room_id: &str) -> Option<CircadianTarget> {
+        self.compute_room_target_at(room_id, self.current_minutes())
+    }
+
+    /// Today's circadian target for a room at `minutes` past midnight.
+    pub fn compute_room_target_at(&self, room_id: &str, minutes: u32) -> Option<CircadianTarget> {
         let room_config = self.config.rooms.get(room_id)?;
         if !room_config.circadian_enabled {
             return None;
         }
         let params = self.params_for_room(room_config);
-        let minutes = self.current_minutes();
         Some(compute_target(&params, minutes))
+    }
+
+    /// The room's effective wake time in minutes past midnight, including the
+    /// runtime schedule override. `None` when circadian is off for the room.
+    pub fn room_wake_minutes(&self, room_id: &str) -> Option<u32> {
+        let room_config = self.config.rooms.get(room_id)?;
+        if !room_config.circadian_enabled {
+            return None;
+        }
+        Some(self.params_for_room(room_config).wake_minutes)
     }
 
     async fn update_all_rooms(&self) -> Result<()> {

@@ -38,6 +38,7 @@ Event-driven daemon with concurrent engines coordinating through shared state an
 - **REST API Server** — axum-based REST API on port 8420; endpoints for room control, circadian management, scenes, and system status
 - **ConfigSync** — auto-discovers new Z2M groups and appends them to config file
 - **LightsOutTask** / **NightModeScheduler** — time-based tasks running on 30s check intervals
+- **AlarmScheduler** (`src/alarm.rs`) — wake-up alarms; each ring spawns a fade task that steps brightness/colour every 15s and stops when the user takes over the room
 
 All engines run as independent `tokio::spawn` tasks. Failures in one engine don't crash the daemon.
 

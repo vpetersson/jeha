@@ -179,6 +179,53 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
         }
     }
 
+    validate_alarms(config)?;
+
+    Ok(())
+}
+
+/// Checks the `[[alarms]]` entries.
+fn validate_alarms(config: &AppConfig) -> Result<()> {
+    let mut seen = std::collections::HashSet::new();
+    for alarm in &config.alarms {
+        if alarm.id.is_empty() {
+            bail!("Alarm must have a non-empty id.");
+        }
+        if !seen.insert(alarm.id.as_str()) {
+            bail!("Duplicate alarm id '{}'.", alarm.id);
+        }
+        if alarm.rooms.is_empty() {
+            bail!("Alarm '{}' must list at least one room.", alarm.id);
+        }
+        for room_ref in &alarm.rooms {
+            if !config.rooms.contains_key(room_ref) {
+                bail!(
+                    "Alarm '{}' references unknown room '{}'.",
+                    alarm.id,
+                    room_ref
+                );
+            }
+        }
+        if !(1..=180).contains(&alarm.fade_mins) {
+            bail!(
+                "alarms.{}.fade_mins must be between 1 and 180, got {}",
+                alarm.id,
+                alarm.fade_mins
+            );
+        }
+        if let Some(b) = alarm.brightness
+            && !(1..=254).contains(&b)
+        {
+            bail!(
+                "alarms.{}.brightness must be between 1 and 254, got {}",
+                alarm.id,
+                b
+            );
+        }
+        if let Some(temp) = alarm.color_temp_k {
+            validate_color_temp(temp, &format!("alarms.{}.color_temp_k", alarm.id))?;
+        }
+    }
     Ok(())
 }
 
@@ -272,6 +319,62 @@ mod tests {
         assert!(validate_time_str("24:00", "test").is_err());
         assert!(validate_time_str("12:60", "test").is_err());
         assert!(validate_time_str("noon", "test").is_err());
+    }
+
+    fn alarm_config(alarms: &str) -> AppConfig {
+        toml::from_str(&format!(
+            r#"
+schema_version = 1
+
+[rooms.bedroom]
+z2m_group = "Bedroom"
+
+{alarms}
+"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn test_validate_alarms() {
+        let ok = alarm_config(
+            r#"
+[[alarms]]
+id = "weekdays"
+rooms = ["bedroom"]
+time = "06:30"
+days = ["mon", "tue", "wed", "thu", "fri"]
+
+[[alarms]]
+id = "weekend"
+rooms = ["bedroom"]
+time = "08:30"
+days = ["sat", "sun"]
+fade_mins = 45
+brightness = 200
+color_temp_k = 3000
+"#,
+        );
+        assert!(validate_config(&ok).is_ok());
+        assert_eq!(ok.alarms[0].fade_mins, 30);
+        assert!(ok.alarms[0].enabled);
+
+        for bad in [
+            "[[alarms]]\nid = \"a\"\nrooms = [\"attic\"]\ntime = \"06:30\"",
+            "[[alarms]]\nid = \"a\"\nrooms = []\ntime = \"06:30\"",
+            "[[alarms]]\nid = \"a\"\nrooms = [\"bedroom\"]\ntime = \"06:30\"\nfade_mins = 0",
+            "[[alarms]]\nid = \"a\"\nrooms = [\"bedroom\"]\ntime = \"06:30\"\nbrightness = 0",
+            "[[alarms]]\nid = \"a\"\nrooms = [\"bedroom\"]\ntime = \"06:30\"\ncolor_temp_k = 500",
+            "[[alarms]]\nid = \"a\"\nrooms = [\"bedroom\"]\ntime = \"06:30\"\n[[alarms]]\nid = \"a\"\nrooms = [\"bedroom\"]\ntime = \"07:30\"",
+        ] {
+            assert!(validate_config(&alarm_config(bad)).is_err(), "{bad}");
+        }
+
+        // Times are checked when the config is parsed.
+        let bad_time: Result<AppConfig, _> = toml::from_str(
+            "schema_version = 1\n[[alarms]]\nid = \"a\"\nrooms = []\ntime = \"25:00\"",
+        );
+        assert!(bad_time.is_err());
     }
 
     #[test]

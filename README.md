@@ -279,6 +279,47 @@ z2m_group = "Porch"
 lights_out = false
 ```
 
+### Alarm clock
+
+A wake-up alarm fades a room's lights in slowly, like a sunrise, so they are fully on at the alarm time. The fade starts at the dimmest, warmest light (brightness 1, 2000K) and brightens evenly to the eye. Set `time` to when you want the lights fully on:
+
+```toml
+[[alarms]]
+id = "weekdays"
+rooms = ["bedroom"]
+time = "06:30"                                  # Fully on at 06:30; the fade starts at 06:00
+days = ["mon", "tue", "wed", "thu", "fri"]      # Default: every day
+
+[[alarms]]
+id = "weekend"
+rooms = ["bedroom"]
+time = "08:30"
+days = ["sat", "sun"]
+fade_mins = 45                                  # Default: 30 (1-180)
+```
+
+Add one entry per schedule to wake at different times on different days. All settings:
+
+| Setting | Default | |
+|---|---|---|
+| `id` | — | Unique name, used by the API |
+| `rooms` | — | Rooms to fade in |
+| `time` | — | When the lights are fully on, `HH:MM` |
+| `days` | every day | Days the alarm rings on. An alarm just after midnight starts fading the evening before; `days` is the day of `time` |
+| `fade_mins` | `30` | Length of the fade |
+| `brightness` | circadian | Brightness at the end of the fade (1-254) |
+| `color_temp_k` | circadian | Colour temperature at the end of the fade |
+| `enabled` | `true` | Set to `false` to keep an alarm in the config but switched off |
+
+By default the fade ends where circadian will be at the alarm time, so circadian takes over without a visible jump. An alarm before `wake_time` ends on the wake-up values instead (circadian holds the dim night values until `wake_time`), and the lights stay there until `wake_time`. An alarm switches night mode off in its rooms.
+
+The alarm leaves you in charge:
+
+- Rooms whose lights are already on are skipped.
+- Turning the lights off, dimming them, picking a scene or switching night mode on stops the fade, and it doesn't start again that day.
+
+To change an alarm without editing `config.toml`, for example from a calendar in Home Assistant, see [Changing alarms from Home Assistant](#changing-alarms-from-home-assistant).
+
 ### API
 
 The REST API is on by default and listens on localhost only. All settings are optional:
@@ -350,6 +391,8 @@ The spec is generated from the handler code, and a test fails if the checked-in 
 | `/api/scenes` | GET | Built-in scenes: bright, relax, movie, energize, nightlight |
 | `/api/circadian` | GET | Circadian status for all rooms |
 | `/api/circadian/schedule` | GET / PUT / DELETE | Read, set or reset the house-wide wake and sleep times |
+| `/api/alarms` | GET | Wake-up alarms with their next ring time |
+| `/api/alarms/{alarm_id}` | PUT / DELETE | Change an alarm's time, days or on/off state, or reset it to config |
 | `/api/system` | GET | MQTT/Z2M connection, uptime, device counts, version |
 | `/api/health` | GET | Liveness check (no token needed) |
 
@@ -373,6 +416,20 @@ curl -X DELETE localhost:8420/api/circadian/schedule   # back to config.toml
 ```
 
 The times replace `circadian.defaults` for every room that doesn't set its own `wake_time`/`sleep_time` in config, and the lights follow on the next circadian update. They're kept in memory only, so after a restart jeha uses `config.toml` until they're pushed again.
+
+### Changing alarms from Home Assistant
+
+Wake-up times that change from day to day can be pushed the same way. Fields you leave out go back to `config.toml`:
+
+```bash
+curl -X PUT localhost:8420/api/alarms/weekdays \
+  -H 'Content-Type: application/json' -d '{"time": "07:15"}'
+curl -X PUT localhost:8420/api/alarms/weekdays \
+  -H 'Content-Type: application/json' -d '{"enabled": false}'   # skip it, e.g. on a holiday
+curl -X DELETE localhost:8420/api/alarms/weekdays             # back to config.toml
+```
+
+`days` takes a list such as `["mon", "fri"]`. Like the schedule, the changes are kept in memory only.
 
 To switch night mode for the whole house from a single toggle, use `POST /api/night-mode` with `{"active": true}` or `{"active": false}`. New rooms are picked up automatically.
 

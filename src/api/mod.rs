@@ -10,7 +10,7 @@ use axum::extract::{Request, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, HOST, ORIGIN};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use tokio::sync::mpsc;
 use tracing::info;
 
@@ -100,6 +100,11 @@ pub fn router(app_state: Arc<AppState>, api: &ApiConfig) -> Router {
                 .delete(handlers::reset_schedule),
         )
         .route("/api/night-mode", post(handlers::set_house_night_mode))
+        .route("/api/alarms", get(handlers::list_alarms))
+        .route(
+            "/api/alarms/{alarm_id}",
+            put(handlers::set_alarm).delete(handlers::reset_alarm),
+        )
         .route("/api/system", get(handlers::get_system_status));
 
     if let Some(token) = api.token.clone() {
@@ -225,6 +230,12 @@ lights = ["0x001788010AAAAAA2"]
 
 [rooms.den.circadian]
 sleep_time = "21:00"
+
+[[alarms]]
+id = "weekdays"
+rooms = ["den"]
+time = "06:30"
+days = ["mon", "tue", "wed", "thu", "fri"]
 "#;
 
     /// The returned event loop is never polled, but has to stay alive: it owns
@@ -561,7 +572,7 @@ sleep_time = "21:00"
                 checked += 1;
             }
         }
-        assert_eq!(checked, 19);
+        assert_eq!(checked, 22);
     }
 
     /// Lets the state actor apply commands the handlers sent.
@@ -613,6 +624,78 @@ sleep_time = "21:00"
         settle().await;
         let (_, body) = send(&app, Method::GET, "/api/circadian/schedule", None, None).await;
         assert_eq!(body["wake_time_source"], "config");
+    }
+
+    #[tokio::test]
+    async fn test_alarms() {
+        let (app, _eventloop) = test_router(&ApiConfig::default());
+        let (status, body) = send(&app, Method::GET, "/api/alarms", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        let alarm = &body["alarms"][0];
+        assert_eq!(alarm["id"], "weekdays");
+        assert_eq!(alarm["time"], "06:30");
+        assert_eq!(alarm["fade_mins"], 30);
+        assert_eq!(alarm["source"], "config");
+        assert!(alarm["next"].as_str().unwrap().ends_with("T06:30"));
+
+        let (status, body) = send(
+            &app,
+            Method::PUT,
+            "/api/alarms/weekdays",
+            None,
+            Some(json!({"time": "07:15", "days": ["sat"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", body);
+        assert_eq!(body["time"], "07:15");
+        assert_eq!(body["days"], json!(["sat"]));
+        assert_eq!(body["source"], "api");
+        assert!(body["next"].as_str().unwrap().ends_with("T07:15"));
+
+        settle().await;
+        let (_, body) = send(&app, Method::GET, "/api/alarms", None, None).await;
+        assert_eq!(body["alarms"][0]["time"], "07:15");
+
+        let (status, body) = send(
+            &app,
+            Method::PUT,
+            "/api/alarms/weekdays",
+            None,
+            Some(json!({"enabled": false})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}", body);
+        assert_eq!(body["time"], "06:30", "left-out fields go back to config");
+        assert_eq!(body["enabled"], false);
+        assert!(body.get("next").is_none());
+
+        let (status, _) = send(
+            &app,
+            Method::PUT,
+            "/api/alarms/weekdays",
+            None,
+            Some(json!({"time": "7am"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+
+        let (status, _) = send(
+            &app,
+            Method::PUT,
+            "/api/alarms/nope",
+            None,
+            Some(json!({"enabled": false})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+
+        let (status, body) = send(&app, Method::DELETE, "/api/alarms/weekdays", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["enabled"], true);
+        assert_eq!(body["source"], "config");
+        settle().await;
+        let (_, body) = send(&app, Method::GET, "/api/alarms", None, None).await;
+        assert_eq!(body["alarms"][0]["source"], "config");
     }
 
     #[tokio::test]

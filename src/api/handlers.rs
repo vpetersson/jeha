@@ -13,7 +13,10 @@ use crate::circadian::CircadianEngine;
 use crate::config::types::AppConfig;
 use crate::event::EventBus;
 use crate::mqtt::publish::Publisher;
-use crate::state::{RoomStateUpdate, ScheduleOverride, SharedState, StateCommand, UpdateSource};
+use crate::state::{
+    AlarmOverride, RoomStateUpdate, ScheduleOverride, SharedState, StateCommand, SystemState,
+    UpdateSource,
+};
 
 use super::types::*;
 
@@ -1588,4 +1591,195 @@ pub async fn set_house_night_mode(
         failed,
         description,
     }))
+}
+
+// --- Alarms ---
+
+impl AppState {
+    fn alarm_info(
+        &self,
+        alarm: &crate::config::types::AlarmConfig,
+        overridden: bool,
+        current: &SystemState,
+    ) -> AlarmInfo {
+        let tz: chrono_tz::Tz = self
+            .config
+            .general
+            .timezone
+            .parse()
+            .unwrap_or(chrono_tz::UTC);
+        let now = chrono::Utc::now().with_timezone(&tz);
+        let next = crate::alarm::next_ring(alarm, now);
+        let mut fading_rooms: Vec<String> = alarm
+            .rooms
+            .iter()
+            .filter(|r| current.rooms.get(*r).is_some_and(|rs| rs.alarm_active))
+            .cloned()
+            .collect();
+        fading_rooms.sort();
+        let days = if alarm.days.is_empty() {
+            "every day".to_string()
+        } else {
+            let names: Vec<String> = alarm
+                .days
+                .iter()
+                .map(|d| format!("{:?}", d).to_lowercase())
+                .collect();
+            names.join(", ")
+        };
+        let description = match next {
+            Some(next) => format!(
+                "Lights in {} fade in over {} min to be fully on at {} ({}). Next: {}.",
+                alarm.rooms.join(", "),
+                alarm.fade_mins,
+                alarm.time,
+                days,
+                next.format("%a %Y-%m-%d %H:%M")
+            ),
+            None if !alarm.enabled => format!("Alarm '{}' is off.", alarm.id),
+            None => format!("Alarm '{}' has no upcoming day to ring on.", alarm.id),
+        };
+        AlarmInfo {
+            id: alarm.id.clone(),
+            rooms: alarm.rooms.clone(),
+            time: alarm.time.to_string(),
+            days: alarm.days.clone(),
+            enabled: alarm.enabled,
+            fade_mins: alarm.fade_mins,
+            brightness: alarm.brightness,
+            color_temp_k: alarm.color_temp_k,
+            source: if overridden {
+                ScheduleSource::Api
+            } else {
+                ScheduleSource::Config
+            },
+            next: next.map(|n| n.format("%Y-%m-%dT%H:%M").to_string()),
+            fading_rooms,
+            description,
+        }
+    }
+
+    /// One alarm with `current`'s runtime override applied.
+    fn alarm_response(&self, alarm_id: &str, current: &SystemState) -> Result<AlarmInfo, ApiError> {
+        let alarm = current
+            .effective_alarms(&self.config.alarms)
+            .into_iter()
+            .find(|a| a.id == alarm_id)
+            .ok_or_else(|| {
+                let mut available: Vec<&str> =
+                    self.config.alarms.iter().map(|a| a.id.as_str()).collect();
+                available.sort_unstable();
+                ApiError::NotFound(format!(
+                    "Alarm '{}' not found. Available alarms: {}",
+                    alarm_id,
+                    if available.is_empty() {
+                        "none (add [[alarms]] to config.toml)".to_string()
+                    } else {
+                        available.join(", ")
+                    }
+                ))
+            })?;
+        let overridden = current.alarm_overrides.contains_key(alarm_id);
+        Ok(self.alarm_info(&alarm, overridden, current))
+    }
+}
+
+/// List the wake-up alarms.
+#[utoipa::path(
+    get,
+    path = "/api/alarms",
+    tag = "alarms",
+    responses(
+        (status = 200, description = "All alarms, with their next ring time", body = AlarmList),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+    )
+)]
+pub async fn list_alarms(State(app): State<Arc<AppState>>) -> Json<AlarmList> {
+    let current = app.state.load();
+    let alarms = current
+        .effective_alarms(&app.config.alarms)
+        .iter()
+        .map(|a| app.alarm_info(a, current.alarm_overrides.contains_key(&a.id), &current))
+        .collect();
+    Json(AlarmList { alarms })
+}
+
+/// Change an alarm's time, days or on/off state.
+///
+/// Meant to be synced from another system (e.g. a calendar in Home Assistant)
+/// when the wake-up time varies. Replaces the whole runtime override: a field
+/// left out goes back to config.toml. Kept in memory only, so after a restart
+/// jeha uses config.toml again until it is set again. An alarm that is already
+/// fading in keeps going.
+#[utoipa::path(
+    put,
+    path = "/api/alarms/{alarm_id}",
+    tag = "alarms",
+    params(("alarm_id" = String, Path, description = "Alarm id from config.toml")),
+    request_body = SetAlarmRequest,
+    responses(
+        (status = 200, description = "Alarm updated", body = AlarmInfo),
+        (status = 400, description = "Invalid time or body", body = ErrorResponse),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown alarm", body = ErrorResponse),
+    )
+)]
+pub async fn set_alarm(
+    State(app): State<Arc<AppState>>,
+    Path(alarm_id): Path<String>,
+    ApiJson(body): ApiJson<SetAlarmRequest>,
+) -> Result<Json<AlarmInfo>, ApiError> {
+    app.alarm_response(&alarm_id, &app.state.load())?;
+    let time = body
+        .time
+        .as_deref()
+        .map(crate::schedule::TimeOfDay::from_hm_str)
+        .transpose()
+        .map_err(|e| ApiError::BadRequest(format!("time: {}", e)))?;
+    let alarm = AlarmOverride {
+        time,
+        days: body.days,
+        enabled: body.enabled,
+    };
+    let mut preview = (**app.state.load()).clone();
+    preview
+        .alarm_overrides
+        .insert(alarm_id.clone(), alarm.clone());
+    let _ = app
+        .state_tx
+        .send(StateCommand::SetAlarmOverride {
+            alarm_id: alarm_id.clone(),
+            alarm: Some(alarm),
+        })
+        .await;
+    Ok(Json(app.alarm_response(&alarm_id, &preview)?))
+}
+
+/// Reset an alarm to config.toml.
+#[utoipa::path(
+    delete,
+    path = "/api/alarms/{alarm_id}",
+    tag = "alarms",
+    params(("alarm_id" = String, Path, description = "Alarm id from config.toml")),
+    responses(
+        (status = 200, description = "Alarm reset", body = AlarmInfo),
+        (status = 401, description = "Missing or wrong API token", body = ErrorResponse),
+        (status = 404, description = "Unknown alarm", body = ErrorResponse),
+    )
+)]
+pub async fn reset_alarm(
+    State(app): State<Arc<AppState>>,
+    Path(alarm_id): Path<String>,
+) -> Result<Json<AlarmInfo>, ApiError> {
+    app.alarm_response(&alarm_id, &app.state.load())?;
+    let mut preview = (**app.state.load()).clone();
+    preview.alarm_overrides.remove(&alarm_id);
+    let _ = app
+        .state_tx
+        .send(StateCommand::SetAlarmOverride {
+            alarm_id: alarm_id.clone(),
+            alarm: None,
+        })
+        .await;
+    Ok(Json(app.alarm_response(&alarm_id, &preview)?))
 }

@@ -1016,6 +1016,160 @@
         }
       }
     },
+    "/api/alarms": {
+      "get": {
+        "tags": [
+          "alarms"
+        ],
+        "summary": "List the wake-up alarms.",
+        "operationId": "list_alarms",
+        "responses": {
+          "200": {
+            "description": "All alarms, with their next ring time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/alarms/{alarm_id}": {
+      "put": {
+        "tags": [
+          "alarms"
+        ],
+        "summary": "Change an alarm's time, days or on/off state.",
+        "description": "Meant to be synced from another system (e.g. a calendar in Home Assistant)\nwhen the wake-up time varies. Replaces the whole runtime override: a field\nleft out goes back to config.toml. Kept in memory only, so after a restart\njeha uses config.toml again until it is set again. An alarm that is already\nfading in keeps going.",
+        "operationId": "set_alarm",
+        "parameters": [
+          {
+            "name": "alarm_id",
+            "in": "path",
+            "description": "Alarm id from config.toml",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAlarmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Alarm updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid time or body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown alarm",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "alarms"
+        ],
+        "summary": "Reset an alarm to config.toml.",
+        "operationId": "reset_alarm",
+        "parameters": [
+          {
+            "name": "alarm_id",
+            "in": "path",
+            "description": "Alarm id from config.toml",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Alarm reset",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlarmInfo"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong API token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown alarm",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/system": {
       "get": {
         "tags": [
@@ -1162,6 +1316,108 @@
           }
         }
       },
+      "AlarmInfo": {
+        "type": "object",
+        "description": "A wake-up alarm.",
+        "required": [
+          "id",
+          "rooms",
+          "time",
+          "days",
+          "enabled",
+          "fade_mins",
+          "source",
+          "fading_rooms",
+          "description"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "weekdays"
+          },
+          "rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "time": {
+            "type": "string",
+            "description": "When the lights are fully on, `HH:MM`.",
+            "example": "06:30"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DayOfWeek"
+            },
+            "description": "Days the alarm rings on. Empty: every day."
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "fade_mins": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Minutes the lights take to fade in, ending at `time`.",
+            "minimum": 0
+          },
+          "brightness": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Brightness at the end of the fade. Absent: the circadian brightness.",
+            "minimum": 0
+          },
+          "color_temp_k": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Colour temperature at the end of the fade. Absent: the circadian value.",
+            "minimum": 0
+          },
+          "source": {
+            "$ref": "#/components/schemas/ScheduleSource",
+            "description": "`api` when `time`, `days` or `enabled` were changed through the API."
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Next time the lights are fully on, local time (`YYYY-MM-DDTHH:MM`).\nAbsent when the alarm is off.",
+            "example": "2026-10-19T06:30"
+          },
+          "fading_rooms": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Rooms that are fading in right now."
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "AlarmList": {
+        "type": "object",
+        "required": [
+          "alarms"
+        ],
+        "properties": {
+          "alarms": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlarmInfo"
+            }
+          }
+        }
+      },
       "CircadianState": {
         "type": "string",
         "description": "- `active`: lights follow the circadian curve\n- `manual_override`: brightness or colour was set by hand; see `remaining_mins`\n- `snoozed`: paused for a fixed time; see `remaining_secs`\n- `paused`: paused until resumed\n- `disabled`: `circadian_enabled = false` for the room",
@@ -1214,6 +1470,19 @@
             "minimum": 0
           }
         }
+      },
+      "DayOfWeek": {
+        "type": "string",
+        "description": "Day of week for schedule filtering.",
+        "enum": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri",
+          "sat",
+          "sun"
+        ]
       },
       "ErrorResponse": {
         "type": "object",
@@ -1637,6 +1906,44 @@
           "config"
         ]
       },
+      "SetAlarmRequest": {
+        "type": "object",
+        "description": "Change an alarm at runtime. Each field that is set replaces the value from\nconfig.toml; a field left out goes back to the config value.",
+        "properties": {
+          "time": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the lights are fully on, `HH:MM` (24h).",
+            "example": "07:15"
+          },
+          "days": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/DayOfWeek"
+            },
+            "description": "Days the alarm rings on. An empty list means every day.",
+            "example": [
+              "mon",
+              "tue",
+              "wed",
+              "thu",
+              "fri"
+            ]
+          },
+          "enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Switch the alarm on or off."
+          }
+        }
+      },
       "SetHouseNightModeRequest": {
         "type": "object",
         "description": "Switch night mode on or off for every room.",
@@ -1853,6 +2160,10 @@
     {
       "name": "night_mode",
       "description": "Night mode"
+    },
+    {
+      "name": "alarms",
+      "description": "Wake-up alarms that fade the lights in"
     },
     {
       "name": "system",

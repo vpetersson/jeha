@@ -6,6 +6,7 @@ use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::alarm::AlarmScheduler;
 use crate::api;
 use crate::automation::AutomationEngine;
 use crate::circadian::CircadianEngine;
@@ -206,6 +207,18 @@ pub async fn run_daemon(
         Some(circadian_for_automations.clone()),
     );
     tokio::spawn(night_scheduler.run());
+
+    // 6e. Start alarm scheduler
+    let alarm_scheduler = AlarmScheduler::new(
+        app_config.clone(),
+        shared_state.clone(),
+        state_tx.clone(),
+        publisher.clone(),
+        event_bus.clone(),
+        cancel.child_token(),
+        Some(circadian_for_automations.clone()),
+    );
+    tokio::spawn(alarm_scheduler.run());
 
     // 7. Start API server
     if app_config.api.enabled {

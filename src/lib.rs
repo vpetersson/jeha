@@ -1,3 +1,4 @@
+pub mod alarm;
 pub mod api;
 pub mod automation;
 pub mod calibration;
