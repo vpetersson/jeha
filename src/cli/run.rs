@@ -34,6 +34,8 @@ pub async fn run_daemon(
     mqtt_host: Option<String>,
     mqtt_port: Option<u16>,
     mqtt_topic: Option<String>,
+    mqtt_username: Option<String>,
+    mqtt_password: Option<String>,
     api: ApiOverrides,
 ) -> Result<()> {
     // 1. Parse config, apply overrides, then validate what will actually run
@@ -48,6 +50,12 @@ pub async fn run_daemon(
     }
     if let Some(topic) = mqtt_topic {
         loaded_config.mqtt.base_topic = topic;
+    }
+    if let Some(username) = mqtt_username {
+        loaded_config.mqtt.username = Some(username);
+    }
+    if let Some(password) = mqtt_password {
+        loaded_config.mqtt.password = Some(password);
     }
     if let Some(enabled) = api.enabled {
         loaded_config.api.enabled = enabled;

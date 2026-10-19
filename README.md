@@ -67,6 +67,21 @@ motion_sensor = "0x00158d0004abcdef"
 motion_timeout_secs = 120  # lights off 2 min after motion clears (default: 300)
 ```
 
+### MQTT
+
+All settings are optional:
+
+```toml
+[mqtt]
+host = "localhost"          # MQTT broker host
+port = 1883                 # MQTT broker port
+base_topic = "zigbee2mqtt"  # Z2M base topic
+username = "jeha"           # broker username (default: connect anonymously)
+password = "change-me"      # broker password, needs username
+```
+
+To keep the password out of `config.toml`, set `JEHA_MQTT_PASSWORD` instead.
+
 ### General settings
 
 ```toml
@@ -359,6 +374,8 @@ jeha migrate --dry-run                # Preview migration without writing
 | `JEHA_MQTT_HOST` | MQTT broker host |
 | `JEHA_MQTT_PORT` | MQTT broker port |
 | `JEHA_MQTT_TOPIC` | Z2M base topic (default: `zigbee2mqtt`) |
+| `JEHA_MQTT_USERNAME` | MQTT broker username (default: none) |
+| `JEHA_MQTT_PASSWORD` | MQTT broker password (default: none) |
 | `JEHA_API_BIND` | API server bind address (default: `127.0.0.1:8420`) |
 | `JEHA_API_ENABLED` | `true`/`false` to turn the REST API on or off (default: `true`) |
 | `JEHA_API_TOKEN` | Bearer token required by the REST API (default: none) |

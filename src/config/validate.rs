@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::schedule::{self, TimeOfDay};
 
-use super::types::{ApiConfig, AppConfig};
+use super::types::{ApiConfig, AppConfig, MqttConfig};
 
 pub fn validate_config(config: &AppConfig) -> Result<()> {
     if config.schema_version != 1 {
@@ -15,6 +15,7 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
         );
     }
 
+    validate_mqtt(&config.mqtt)?;
     validate_api(&config.api)?;
 
     for (room_id, room) in &config.rooms {
@@ -229,6 +230,18 @@ fn validate_alarms(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
+/// Checks the `[mqtt]` section.
+pub fn validate_mqtt(mqtt: &MqttConfig) -> Result<()> {
+    if mqtt.username.as_deref() == Some("") {
+        bail!("mqtt.username is set but empty. Remove it to connect anonymously.");
+    }
+    // MQTT 3.1.1 only allows a password alongside a username.
+    if mqtt.password.is_some() && mqtt.username.is_none() {
+        bail!("mqtt.password is set without mqtt.username.");
+    }
+    Ok(())
+}
+
 /// Checks the `[api]` section.
 pub fn validate_api(api: &ApiConfig) -> Result<()> {
     if !api.enabled {
@@ -375,6 +388,25 @@ color_temp_k = 3000
             "schema_version = 1\n[[alarms]]\nid = \"a\"\nrooms = []\ntime = \"25:00\"",
         );
         assert!(bad_time.is_err());
+    }
+
+    #[test]
+    fn test_validate_mqtt() {
+        let mut mqtt = MqttConfig::default();
+        assert!(validate_mqtt(&mqtt).is_ok());
+
+        mqtt.password = Some("s3cret".to_string());
+        assert!(validate_mqtt(&mqtt).is_err());
+
+        mqtt.username = Some(String::new());
+        assert!(validate_mqtt(&mqtt).is_err());
+
+        mqtt.username = Some("jeha".to_string());
+        assert!(validate_mqtt(&mqtt).is_ok());
+
+        // Some brokers accept a username with no password.
+        mqtt.password = None;
+        assert!(validate_mqtt(&mqtt).is_ok());
     }
 
     #[test]
