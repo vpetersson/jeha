@@ -35,6 +35,9 @@ impl MqttHandle {
         opts.set_keep_alive(Duration::from_secs(30));
         opts.set_clean_session(true);
         opts.set_max_packet_size(1024 * 1024, 1024 * 1024); // 1MB - Z2M bridge/devices can be large
+        if let Some(ref username) = config.username {
+            opts.set_credentials(username, config.password.as_deref().unwrap_or(""));
+        }
 
         let (client, event_loop) = AsyncClient::new(opts, 256);
 

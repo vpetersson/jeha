@@ -38,6 +38,13 @@ pub struct MqttConfig {
     pub port: u16,
     #[serde(default = "default_base_topic")]
     pub base_topic: String,
+    /// Username for the MQTT broker.
+    /// Default: unset (connect anonymously).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    /// Password for the MQTT broker. Requires `username`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password: Option<String>,
 }
 
 fn default_mqtt_host() -> String {

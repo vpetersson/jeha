@@ -8,6 +8,8 @@ services:
       - ./config.toml:/config.toml
     environment:
       - JEHA_MQTT_HOST=mqtt
+      # - JEHA_MQTT_USERNAME=jeha
+      # - JEHA_MQTT_PASSWORD=change-me
     logging:
       driver: journald
 

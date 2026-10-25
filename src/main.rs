@@ -22,6 +22,8 @@ async fn main() -> Result<()> {
             mqtt_host,
             mqtt_port,
             mqtt_topic,
+            mqtt_username,
+            mqtt_password,
             api_bind,
             api_enabled,
             api_token,
@@ -31,7 +33,16 @@ async fn main() -> Result<()> {
                 bind: api_bind,
                 token: api_token,
             };
-            jeha::cli::run::run_daemon(&config, mqtt_host, mqtt_port, mqtt_topic, api).await?;
+            jeha::cli::run::run_daemon(
+                &config,
+                mqtt_host,
+                mqtt_port,
+                mqtt_topic,
+                mqtt_username,
+                mqtt_password,
+                api,
+            )
+            .await?;
         }
         Commands::Validate {
             config: config_path,
@@ -56,9 +67,19 @@ async fn main() -> Result<()> {
             mqtt_host,
             mqtt_port,
             base_topic,
+            mqtt_username,
+            mqtt_password,
             output,
         } => {
-            jeha::cli::init::run_init(&mqtt_host, mqtt_port, &output, &base_topic).await?;
+            jeha::cli::init::run_init(
+                &mqtt_host,
+                mqtt_port,
+                &output,
+                &base_topic,
+                mqtt_username.as_deref(),
+                mqtt_password.as_deref(),
+            )
+            .await?;
         }
     }
 

@@ -32,6 +32,12 @@ pub enum Commands {
         /// MQTT base topic (overrides config file)
         #[arg(long, env = "JEHA_MQTT_TOPIC")]
         mqtt_topic: Option<String>,
+        /// MQTT broker username (overrides config file)
+        #[arg(long, env = "JEHA_MQTT_USERNAME")]
+        mqtt_username: Option<String>,
+        /// MQTT broker password (overrides config file)
+        #[arg(long, env = "JEHA_MQTT_PASSWORD", hide_env_values = true)]
+        mqtt_password: Option<String>,
         /// API server bind address (overrides config file)
         #[arg(long, alias = "mcp-bind", env = "JEHA_API_BIND")]
         api_bind: Option<String>,
@@ -72,6 +78,12 @@ pub enum Commands {
         /// Z2M base topic
         #[arg(long, default_value = "zigbee2mqtt", env = "JEHA_MQTT_TOPIC")]
         base_topic: String,
+        /// MQTT broker username
+        #[arg(long, env = "JEHA_MQTT_USERNAME")]
+        mqtt_username: Option<String>,
+        /// MQTT broker password
+        #[arg(long, env = "JEHA_MQTT_PASSWORD", hide_env_values = true)]
+        mqtt_password: Option<String>,
         /// Output file
         #[arg(short, long, default_value = "config.toml")]
         output: PathBuf,

@@ -44,13 +44,27 @@ struct DeviceInfo {
     is_remote: bool,
 }
 
-pub async fn run_init(host: &str, port: u16, output: &Path, base_topic: &str) -> Result<()> {
+pub async fn run_init(
+    host: &str,
+    port: u16,
+    output: &Path,
+    base_topic: &str,
+    username: Option<&str>,
+    password: Option<&str>,
+) -> Result<()> {
+    if password.is_some() && username.is_none() {
+        bail!("--mqtt-password needs --mqtt-username.");
+    }
+
     info!("Connecting to MQTT at {}:{}", host, port);
 
     let mut opts = MqttOptions::new("jeha-init", host, port);
     opts.set_keep_alive(Duration::from_secs(10));
     opts.set_clean_session(true);
     opts.set_max_packet_size(1024 * 1024, 1024 * 1024); // 1MB - Z2M bridge/devices can be large
+    if let Some(username) = username {
+        opts.set_credentials(username, password.unwrap_or(""));
+    }
 
     let (client, mut event_loop) = AsyncClient::new(opts, 64);
 
@@ -108,7 +122,7 @@ pub async fn run_init(host: &str, port: u16, output: &Path, base_topic: &str) ->
                         }
                     }
                     Err(e) => {
-                        bail!("MQTT connection failed: {}. Check that the broker is reachable at {}:{}", e, host, port);
+                        bail!("MQTT connection failed: {}. Check that the broker is reachable at {}:{} and the credentials are correct", e, host, port);
                     }
                     _ => {}
                 }

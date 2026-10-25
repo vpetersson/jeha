@@ -8,6 +8,8 @@ impl Default for MqttConfig {
             host: "localhost".to_string(),
             port: 1883,
             base_topic: "zigbee2mqtt".to_string(),
+            username: None,
+            password: None,
         }
     }
 }
