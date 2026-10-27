@@ -252,4 +252,44 @@ latitude = 95.0
         let config: AppConfig = toml::from_str(toml_str).unwrap();
         assert!(validate::validate_config(&config).is_err());
     }
+
+    #[test]
+    fn test_night_motion_timeout_precedence() {
+        let toml_str = r#"
+schema_version = 1
+
+[night_mode.defaults]
+color_temp_k = 2000
+brightness = 2
+motion_timeout_secs = 120
+
+[rooms.default_room]
+z2m_group = "Default"
+motion_sensor = "0x00158d0004abcdef"
+
+[rooms.hallway]
+z2m_group = "Hallway"
+motion_sensor = "0x00158d0004abcdef"
+motion_timeout_secs = 900
+
+[rooms.bedroom]
+z2m_group = "Bedroom"
+motion_sensor = "0x00158d0004abcdef"
+motion_timeout_secs = 900
+[rooms.bedroom.night_mode]
+motion_timeout_secs = 60
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let night = |room: &str| {
+            config.rooms[room]
+                .effective_night_mode(&config.night_mode.defaults)
+                .motion_timeout_secs
+        };
+        // No room timeout: the global night default applies.
+        assert_eq!(night("default_room"), 120);
+        // A room's own timeout is not cut short by the global night default.
+        assert_eq!(night("hallway"), 900);
+        // An explicit per-room night timeout still wins.
+        assert_eq!(night("bedroom"), 60);
+    }
 }

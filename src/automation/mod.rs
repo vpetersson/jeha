@@ -256,6 +256,15 @@ impl AutomationEngine {
                         }
                     }
 
+                    // Someone is here: cancel any pending off-timer before the
+                    // illuminance gate, which only decides whether to turn the
+                    // lights *on*. Skipping this on a bright day let the timer
+                    // switch the lights off on people who were still moving.
+                    if let Some(handle) = self.motion_off_handles.remove(&room_id) {
+                        handle.abort();
+                        debug!("Cancelled pending motion-off timer for room '{}'", room_id);
+                    }
+
                     // Illuminance gate
                     if room_config.illuminance_gate {
                         let threshold = room_config.effective_illuminance_threshold(
@@ -280,12 +289,6 @@ impl AutomationEngine {
                                 continue;
                             }
                         }
-                    }
-
-                    // Cancel any pending off-timer
-                    if let Some(handle) = self.motion_off_handles.remove(&room_id) {
-                        handle.abort();
-                        debug!("Cancelled pending motion-off timer for room '{}'", room_id);
                     }
 
                     // Only turn on if lights are currently off
@@ -469,6 +472,22 @@ impl AutomationEngine {
 
                     let handle = tokio::spawn(async move {
                         tokio::time::sleep(std::time::Duration::from_secs(timeout_secs)).await;
+                        // Safety net for a missed or gated MotionDetected: never
+                        // switch off a room whose sensor still reports occupancy.
+                        // The sensor's next clear schedules a fresh timer.
+                        let occupied = publisher
+                            .state_handle()
+                            .load()
+                            .rooms
+                            .get(&rid)
+                            .is_some_and(|rs| rs.occupancy);
+                        if occupied {
+                            info!(
+                                "Built-in motion: not turning off '{}' — sensor still reports occupancy",
+                                rid
+                            );
+                            return;
+                        }
                         info!("Built-in motion: turning off lights in '{}'", rid);
                         let off_action = ActionConfig::LightsOff {
                             delay_secs: 0,

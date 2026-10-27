@@ -183,6 +183,8 @@ pub struct NightModeSection {
 pub struct NightModeDefaults {
     pub color_temp_k: u16,
     pub brightness: u8,
+    /// Motion timeout while night mode is active (seconds), for rooms that
+    /// don't set their own `motion_timeout_secs` or `night_mode.motion_timeout_secs`.
     pub motion_timeout_secs: u64,
     /// When someone explicitly enables night mode (remote button or REST API) while
     /// the room's lights are off, turn them on at the night mode values instead of
@@ -237,6 +239,7 @@ pub struct RoomConfig {
     pub motion_sensor: Option<String>,
     /// Per-room motion timeout override (seconds). When set alongside motion_sensor,
     /// jeha automatically turns lights on/off based on motion without needing automations.
+    /// Also applies during night mode unless `night_mode.motion_timeout_secs` is set.
     pub motion_timeout_secs: Option<u64>,
     /// Schedule gate for built-in motion handling. When set, motion events are only
     /// processed when the current time matches this schedule.
@@ -306,6 +309,8 @@ pub struct NightModeOverride {
     pub schedule: Option<Schedule>,
     pub color_temp_k: Option<u16>,
     pub brightness: Option<u8>,
+    /// Motion timeout while night mode is active (seconds). Falls back to the
+    /// room's `motion_timeout_secs`, then `night_mode.defaults.motion_timeout_secs`.
     pub motion_timeout_secs: Option<u64>,
     /// Per-room override for `night_mode.defaults.turn_on_when_off`.
     pub turn_on_when_off: Option<bool>,
