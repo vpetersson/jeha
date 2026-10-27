@@ -91,6 +91,9 @@ impl Publisher {
         }
     }
 
+    /// Turn a group on. Members whose calibration or color_temp range resolves
+    /// to a different value get that field per device instead of from the
+    /// group command (see `calibration::plan_group_publish`).
     pub async fn turn_on_group(
         &self,
         group_name: &str,
@@ -99,16 +102,84 @@ impl Publisher {
         transition: Option<u32>,
     ) -> Result<()> {
         let mut payload = json!({"state": "ON"});
-        if let Some(b) = brightness {
+        self.publish_group_planned(
+            group_name,
+            &mut payload,
+            brightness,
+            color_temp_mired,
+            transition,
+            false,
+        )
+        .await
+    }
+
+    /// Publish brightness/color_temp to a group so that every member ends up
+    /// at its own calibrated value. Fields that resolve to the same value for
+    /// every member go in one group command; the rest go to each member
+    /// individually, and never in the group command, so no bulb is set to one
+    /// value and then corrected to another.
+    async fn publish_group_planned(
+        &self,
+        group_name: &str,
+        payload: &mut serde_json::Value,
+        brightness: Option<u8>,
+        color_temp_mired: Option<u16>,
+        transition: Option<u32>,
+        skip_offline: bool,
+    ) -> Result<()> {
+        let current = self.state.load();
+        let plan = match current.group_map.get(group_name) {
+            Some(group) => calibration::plan_group_publish(
+                group,
+                &self.config.light_calibration,
+                &current.device_map,
+                brightness,
+                color_temp_mired,
+            ),
+            // Group not discovered yet — publish the values as given.
+            None => calibration::GroupPublishPlan {
+                group_brightness: brightness,
+                group_color_temp_mired: color_temp_mired,
+                members: Vec::new(),
+            },
+        };
+
+        if let Some(b) = plan.group_brightness {
             payload["brightness"] = json!(b);
         }
-        if let Some(ct) = color_temp_mired {
+        if let Some(ct) = plan.group_color_temp_mired {
             payload["color_temp"] = json!(ct);
         }
         if let Some(t) = transition {
             payload["transition"] = json!(t);
         }
-        self.set_light_group(group_name, &payload).await
+        // A payload with nothing but a transition does nothing; skip it.
+        let has_command = payload
+            .as_object()
+            .is_some_and(|o| o.keys().any(|k| k != "transition"));
+        if has_command {
+            self.set_light_group(group_name, payload).await?;
+        }
+
+        for member in &plan.members {
+            if skip_offline && !current.is_device_available(&member.ieee) {
+                debug!("Skipping group fan-out to offline device {}", member.ieee);
+                continue;
+            }
+            let mut member_payload = json!({});
+            if let Some(b) = member.brightness {
+                member_payload["brightness"] = json!(b);
+            }
+            if let Some(ct) = member.color_temp_mired {
+                member_payload["color_temp"] = json!(ct);
+            }
+            if let Some(t) = transition {
+                member_payload["transition"] = json!(t);
+            }
+            self.publish_to_ieee(&member.ieee, &member_payload, &current)
+                .await?;
+        }
+        Ok(())
     }
 
     pub async fn turn_off_group(&self, group_name: &str, transition: Option<u32>) -> Result<()> {
@@ -228,6 +299,8 @@ impl Publisher {
         self.publish_to_ieee(ieee, &payload, &current).await
     }
 
+    /// Push circadian values to a group without `"state":"ON"`, fanning out
+    /// per device where members resolve to different values.
     pub async fn push_circadian_group(
         &self,
         group_name: &str,
@@ -235,12 +308,16 @@ impl Publisher {
         color_temp_mired: u16,
         transition: u32,
     ) -> Result<()> {
-        let payload = json!({
-            "brightness": brightness,
-            "color_temp": color_temp_mired,
-            "transition": transition,
-        });
-        self.set_light_group(group_name, &payload).await
+        let mut payload = json!({});
+        self.publish_group_planned(
+            group_name,
+            &mut payload,
+            Some(brightness),
+            Some(color_temp_mired),
+            Some(transition),
+            true,
+        )
+        .await
     }
 
     pub async fn recall_scene_group(&self, group_name: &str, scene_id: u16) -> Result<()> {
