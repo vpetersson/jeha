@@ -451,17 +451,31 @@ async fn handle_device_state(
                 "Ignoring occupancy={} republish from '{}' — no transition",
                 occupancy, device_name
             );
-        } else if occupancy {
-            event_bus.publish(Event::MotionDetected {
-                room_id: String::new(),
-                sensor_ieee: ieee,
-                illuminance,
-            });
         } else {
-            event_bus.publish(Event::MotionCleared {
-                room_id: String::new(),
-                sensor_ieee: ieee,
-            });
+            // Record occupancy on the room before publishing the event, so a
+            // pending motion-off timer can see the room is still occupied.
+            if let Some(room_ids) = lookup.sensor_rooms.get(&ieee) {
+                for room_id in room_ids {
+                    let _ = state_tx
+                        .send(StateCommand::UpdateRoomState {
+                            room_id: room_id.clone(),
+                            update: RoomStateUpdate::Occupancy(occupancy),
+                        })
+                        .await;
+                }
+            }
+            if occupancy {
+                event_bus.publish(Event::MotionDetected {
+                    room_id: String::new(),
+                    sensor_ieee: ieee,
+                    illuminance,
+                });
+            } else {
+                event_bus.publish(Event::MotionCleared {
+                    room_id: String::new(),
+                    sensor_ieee: ieee,
+                });
+            }
         }
     }
 

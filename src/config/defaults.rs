@@ -132,21 +132,27 @@ impl RoomConfig {
     }
 
     pub fn effective_night_mode(&self, defaults: &NightModeDefaults) -> EffectiveNightMode {
+        // A room's own timeout beats the global night default: a room set to
+        // 15 minutes must not silently drop to the 2-minute night default.
+        let motion_timeout_secs = self
+            .night_mode
+            .as_ref()
+            .and_then(|nm| nm.motion_timeout_secs)
+            .or(self.motion_timeout_secs)
+            .unwrap_or(defaults.motion_timeout_secs);
         match &self.night_mode {
             Some(nm) => EffectiveNightMode {
                 schedule: nm.schedule.clone(),
                 color_temp_k: nm.color_temp_k.unwrap_or(defaults.color_temp_k),
                 brightness: nm.brightness.unwrap_or(defaults.brightness),
-                motion_timeout_secs: nm
-                    .motion_timeout_secs
-                    .unwrap_or(defaults.motion_timeout_secs),
+                motion_timeout_secs,
                 turn_on_when_off: nm.turn_on_when_off.unwrap_or(defaults.turn_on_when_off),
             },
             None => EffectiveNightMode {
                 schedule: None,
                 color_temp_k: defaults.color_temp_k,
                 brightness: defaults.brightness,
-                motion_timeout_secs: defaults.motion_timeout_secs,
+                motion_timeout_secs,
                 turn_on_when_off: defaults.turn_on_when_off,
             },
         }

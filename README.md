@@ -191,6 +191,11 @@ motion_timeout_secs = 120     # Shorter timeout during night
 turn_on_when_off = true       # Night mode button turns dark rooms on at these values
 ```
 
+The night `motion_timeout_secs` only applies to rooms that don't set their own.
+During night mode a room uses `night_mode.motion_timeout_secs` if set, then its own
+`motion_timeout_secs`, and only then this global night default, so a room set to
+15 minutes stays at 15 minutes at night.
+
 `turn_on_when_off` only applies to explicit requests — the night mode button on a
 remote, or `POST /rooms/<room>/night_mode`. Pressing it in a dark room turns the
 lights on at the night mode values, so the button always does something visible.
